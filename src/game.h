@@ -25,6 +25,14 @@ typedef struct {
     /* Tile currently under the mouse cursor (-1 if none) */
     int hovered_row;
     int hovered_col;
+
+    /* Time tracking for frame-rate-independent movement.
+    * last_tick  – SDL timestamp (ms) at the end of the previous frame.
+    * delta_time – seconds elapsed since that frame (e.g. 0.016 at 60fps).
+    * All per-frame movement is multiplied by delta_time so the game
+    * behaves identically at 30, 60, or 144 fps. */
+    Uint64 last_tick;
+    float delta_time;
 } GameState;
 
 /* Allocate and initialise a new GameState.

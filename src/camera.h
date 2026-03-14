@@ -12,7 +12,7 @@
  * Pan speed is measured in pixels per frame.
  * ========================================================= */
 
-#define CAMERA_PAN_SPEED 8   /* pixels moved per frame when key held */
+#define CAMERA_PAN_SPEED 400.0f  /* pixels moved per second when key held */
 
 typedef struct {
     float offset_x;   /* horizontal scroll in pixels */
