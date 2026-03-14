@@ -17,6 +17,7 @@
  */
 
 #include "render.h"
+#include "game.h"   /* SCREEN_W, SCREEN_H */
 #include <SDL3/SDL.h>
 
 /* ---- Colour table (R, G, B, A) for each TileType ------- */
@@ -162,8 +163,8 @@ void render_map(SDL_Renderer *renderer,
             iso_to_screen(r, c, cam, &sx, &sy);
 
             /* Simple frustum cull: skip tiles completely off screen */
-            if (sx + TILE_W < 0   || sx > 1920 ||
-                sy + TILE_H < 0   || sy > 1080) {
+            if (sx + TILE_W < 0   || sx > SCREEN_W ||
+                sy + TILE_H < 0   || sy > SCREEN_H) {
                 continue;
             }
 

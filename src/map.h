@@ -2,58 +2,73 @@
 #define MAP_H
 
 /* =========================================================
- * map.h  --  Tile map data structures
+ * map.h  --  Tile map data structures  (Phase 2)
  *
- * The world is a 2D grid of tiles.  Each tile has a type
- * (grass, water, forest …) and a screen position is derived
- * from its grid coordinates using isometric projection.
- *
- * Isometric projection (the "2:1 diamond" used by Anno):
- *
- *   screen_x = (col - row) * (TILE_W / 2)
- *   screen_y = (col + row) * (TILE_H / 2)
- *
- * TILE_W and TILE_H refer to the full bounding box of one
- * tile diamond, not the visible edge length.
+ * Phase 2 changes vs Phase 1:
+ *   - MAP_COLS/ROWS expanded to 64x64
+ *   - Tile gains buildable, fertility, movement_cost fields
+ *   - New Fertility bitmask enum
+ *   - map_init() now takes a seed for the noise generator
  * ========================================================= */
 
-/* Tile pixel dimensions  (64 wide, 32 tall) */
+#include <stdint.h>   /* uint32_t for seed */
+
+/* Tile pixel dimensions (unchanged) */
 #define TILE_W 64
 #define TILE_H 32
 
 /* Map size in tiles */
-#define MAP_COLS 40
-#define MAP_ROWS 40
+#define MAP_COLS 64
+#define MAP_ROWS 64
 
-/* ---- Tile types ----------------------------------------- */
+/* ---- Fertility flags -----------------------------------
+ * A tile can support multiple crop types simultaneously.
+ * Stored as a bitmask so we can write e.g.:
+ *   t->fertility = FERTILE_GRAIN | FERTILE_HOP;
+ * -------------------------------------------------------- */
+typedef enum {
+    FERTILE_NONE   = 0,
+    FERTILE_GRAIN  = 1 << 0,   /* wheat fields, bakeries  */
+    FERTILE_HOP    = 1 << 1,   /* beer production chain   */
+    FERTILE_POTATO = 1 << 2,   /* schnapps chain          */
+    FERTILE_PEPPER = 1 << 3,   /* reserved for new world  */
+} Fertility;
+
+/* ---- Tile types ---------------------------------------- */
 typedef enum {
     TILE_GRASS  = 0,
     TILE_WATER  = 1,
     TILE_FOREST = 2,
     TILE_SAND   = 3,
-    TILE_TYPE_COUNT          /* always last – gives us the count */
+    TILE_TYPE_COUNT
 } TileType;
 
-/* ---- One tile in the grid ------------------------------- */
+/* ---- One tile in the grid ------------------------------ */
 typedef struct {
-    TileType type;
-    int      elevation;   /* reserved for later (hills etc.)  */
+    TileType  type;
+    int       elevation;      /* 0-255 heightmap value kept for debug */
+
+    /* Gameplay fields */
+    int       buildable;      /* 1 if a building may be placed here  */
+    Fertility fertility;      /* which crops grow here (bitmask)     */
+    int       movement_cost;  /* reserved for pathfinding (Phase 6+) */
 } Tile;
 
-/* ---- The whole map -------------------------------------- */
+/* ---- The whole map ------------------------------------- */
 typedef struct {
     Tile tiles[MAP_ROWS][MAP_COLS];
     int  rows;
     int  cols;
+    uint32_t seed;            /* seed used to generate this map */
 } Map;
 
-/* ---- Function declarations ----------------------------- */
+/* ---- Function declarations ---------------------------- */
 
-/* Initialise every tile to TILE_GRASS (or a simple pattern). */
-void map_init(Map *map);
+/* Generate a new island using value noise seeded by `seed`.
+ * Every field in every tile is fully initialised. */
+void map_init(Map *map, uint32_t seed);
 
-/* Return a pointer to the tile at (row, col), or NULL if out of
- * bounds.  Callers should always check for NULL. */
+/* Bounds-checked accessor.  Returns NULL if out of range. */
 Tile *map_get_tile(Map *map, int row, int col);
 
 #endif /* MAP_H */

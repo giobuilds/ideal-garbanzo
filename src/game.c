@@ -11,7 +11,9 @@ GameState *game_init(void)
     GameState *gs = (GameState *)malloc(sizeof(GameState));
     if (!gs) return NULL;
 
-    map_init(&gs->map);
+    uint32_t seed = (uint32_t)SDL_GetTicksNS();
+    SDL_Log("Map seed: %u", seed);
+    map_init(&gs->map, seed);
     camera_init(&gs->camera, SCREEN_W, SCREEN_H,
                 MAP_COLS, MAP_ROWS);
     input_init(&gs->input);
