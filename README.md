@@ -1,4 +1,4 @@
-Project Architecture (High Level)
+# Project Architecture (High Level)
 anno1800-clone/
 ├── src/
 │   ├── main.c           ← your skeleton
@@ -14,3 +14,12 @@ anno1800-clone/
 │   └── sprites/
 ├── CMakeLists.txt
 └── Makefile
+
+# Deliverables
+File        Responsibility
+main.c      SDL callbacks only — no logic, no globals
+map.h/c     40×40 tile grid; TILE_GRASS, WATER, FOREST, SAND
+camera.h/c  offset_x/y scroll state; centred on FullHD at init
+input.h/c   Tracks held WASD/arrow keys + mouse position
+render.h/c  Isometric projection math + coloured diamond drawing
+game.h/c    Owns all sub-systems; game_update() drives camera + hover
