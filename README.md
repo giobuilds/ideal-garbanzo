@@ -50,3 +50,12 @@ game.h/c    Owns all sub-systems; game_update() drives camera + hover
 - Fix mouse coordinate conversion via SDL_RenderCoordinatesFromWindow
 - Add fullscreen mode with SDL_LOGICAL_PRESENTATION_STRETCH
 - Right-click deselects building / closes menu
+
+# Bug fix 001
+
+Fix isometric tile hit-test accuracy in screen_to_iso()
+
+- Offset input point to diamond centroid before inverting projection
+  (was testing against top-left corner of bounding box, not tile centre)
+- Replace (int) cast with floorf() for correct negative coordinate rounding
+- Add math.h include and link libm for floorf()

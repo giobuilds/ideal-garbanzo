@@ -25,6 +25,7 @@
 #include "game.h"   /* SCREEN_W, SCREEN_H */
 #include "building.h"
 #include <SDL3/SDL.h>
+#include <math.h>   /* floorf() */
 
 /* ---- Colour table (R, G, B, A) for each TileType ------- */
 static const SDL_Color TILE_COLOURS[TILE_TYPE_COUNT] = {
@@ -68,17 +69,25 @@ void iso_to_screen(int row, int col, const Camera *cam,
 void screen_to_iso(int sx, int sy, const Camera *cam,
                    int *out_row, int *out_col)
 {
-    /* Remove camera offset to get into "world iso space" */
-    float px = (float)sx - cam->offset_x;
-    float py = (float)sy - cam->offset_y;
-
     /* Half-tile dimensions as floats */
     float hw = (float)(TILE_W / 2);
     float hh = (float)(TILE_H / 2);
+    
+    /* CHANGED fix 1: shift input to diamond centroid.
+     * iso_to_screen() maps (row,col) to the TOP-LEFT of the bounding
+     * box.  The visible centre of the diamond is at (+hw, +hh) from
+     * that corner.  Subtracting that offset before inverting means the
+     * hit-test is evaluated relative to each tile's centre rather than
+     * its corner — without this the picked tile is consistently off by
+     * one diagonal neighbour near tile edges. */
+    float px = (float)sx - cam->offset_x - hw;
+    float py = (float)sy - cam->offset_y - hh;
 
-    /* Solve for col and row */
-    *out_col = (int)( (px / hw + py / hh) / 2.0f );
-    *out_row = (int)( (py / hh - px / hw) / 2.0f );
+    /* CHANGED fix 2: floorf() instead of (int) cast.
+     * (int) truncates toward zero: -0.4f becomes 0 instead of -1.
+     * floorf() rounds toward -infinity, which is correct for a grid. */
+    *out_col = (int)floorf( (px / hw + py / hh) / 2.0f );
+    *out_row = (int)floorf( (py / hh - px / hw) / 2.0f );
 }
 
 /* ---- draw_diamond --------------------------------------

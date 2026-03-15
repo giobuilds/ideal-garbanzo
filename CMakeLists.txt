@@ -47,7 +47,7 @@ add_executable(anno_clone ${SOURCES})
 
 # Link against the SDL3 shared library target.
 # SDL3::SDL3 is the target name the SDL3 CMake config exports.
-target_link_libraries(anno_clone PRIVATE SDL3::SDL3)
+target_link_libraries(anno_clone PRIVATE SDL3::SDL3 m)   # m = libm for floorf()
 
 # ---- Install (optional) ----------------------------------
 install(TARGETS anno_clone DESTINATION bin)
