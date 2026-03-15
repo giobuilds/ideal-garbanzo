@@ -20,6 +20,7 @@
 #include "camera.h"
 #include "input.h"
 #include "building.h"
+#include "resource.h"
 
 #define SCREEN_W 1920
 #define SCREEN_H 1080
@@ -54,6 +55,7 @@ typedef struct {
     int placement_valid;
 
     int menu_open;  /* 1 when the cog menu overlay is open */
+    Stockpile stockpile;
 } GameState;
 
 /* Allocate and initialise a new GameState.

@@ -201,6 +201,9 @@ SDL_AppResult SDL_AppIterate(void *appstate)
     render_hovered_tile(app->r, &gs->camera,
                         gs->hovered_row, gs->hovered_col);
  
+    /* CHANGED Phase 4: draw resource stockpile panel */
+    render_resources(app->r, &gs->stockpile);
+
     /* HUD on top of everything */
     ui_draw(app->r, SCREEN_W, SCREEN_H, gs->selected_building, 
             gs->input.logical_x, gs->input.logical_y, gs->menu_open);

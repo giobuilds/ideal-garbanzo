@@ -72,7 +72,7 @@ void screen_to_iso(int sx, int sy, const Camera *cam,
     /* Half-tile dimensions as floats */
     float hw = (float)(TILE_W / 2);
     float hh = (float)(TILE_H / 2);
-    
+
     /* CHANGED fix 1: shift input to diamond centroid.
      * iso_to_screen() maps (row,col) to the TOP-LEFT of the bounding
      * box.  The visible centre of the diamond is at (+hw, +hh) from
@@ -294,4 +294,101 @@ void render_ghost(SDL_Renderer *renderer,
         }
     }
     SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
+}
+
+/* ---- render_resources ----------------------------------
+ * CHANGED Phase 4: new function.
+ *
+ * Draws a small panel in the top-left corner showing the
+ * current stockpile count for each resource.
+ *
+ * Layout (one row per resource):
+ *   [colour swatch]  [amount bar]
+ *
+ * Real numbers need SDL_ttf (Phase 5).  For now the amount
+ * is encoded as a segmented bar — each filled segment = 10
+ * units, so the bar fills up visually as resources grow.
+ * Max bar width represents 100 units (10 segments).
+ * -------------------------------------------------------- */
+void render_resources(SDL_Renderer *renderer,
+                      const Stockpile *s)
+{
+    /* Colour per resource: Wood, Fish, Grain, Gold */
+    static const SDL_Color RES_COL[RES_COUNT] = {
+        { 139,  90,  43, 255 },   /* WOOD  — brown  */
+        {  50, 180, 230, 255 },   /* FISH  — cyan   */
+        { 240, 210,  50, 255 },   /* GRAIN — yellow */
+        { 255, 195,   0, 255 },   /* GOLD  — gold   */
+    };
+ 
+    int        i;
+    int        panel_x  = 16;
+    int        panel_y  = 16;
+    int        row_h    = 22;
+    int        swatch_w = 14;
+    int        seg_w    = 8;    /* width of one bar segment  */
+    int        seg_gap  = 2;    /* gap between segments      */
+    int        max_segs = 10;   /* bar represents 0–100 units */
+    int        panel_w  = swatch_w + 6 + max_segs * (seg_w + seg_gap) + 8;
+    int        panel_h  = RES_COUNT * row_h + 10;
+ 
+    /* Panel background */
+    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+    SDL_SetRenderDrawColor(renderer, 20, 16, 10, 200);
+    SDL_FRect bg = {
+        (float)(panel_x - 6),  (float)(panel_y - 6),
+        (float)(panel_w),       (float)(panel_h)
+    };
+    SDL_RenderFillRect(renderer, &bg);
+    SDL_SetRenderDrawColor(renderer, 90, 75, 45, 180);
+    SDL_RenderRect(renderer, &bg);
+    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
+ 
+    /* One row per resource */
+    for (i = 0; i < RES_COUNT; i++) {
+        int   amount = s->amount[i];
+        int   segs_filled;
+        int   j;
+        float ry = (float)(panel_y + i * row_h);
+ 
+        /* Colour swatch */
+        SDL_FRect swatch = {
+            (float)panel_x, ry + 4.0f,
+            (float)swatch_w, (float)(row_h - 8)
+        };
+        SDL_SetRenderDrawColor(renderer,
+            RES_COL[i].r, RES_COL[i].g, RES_COL[i].b, 255);
+        SDL_RenderFillRect(renderer, &swatch);
+ 
+        /* Segmented amount bar.
+         * Each segment represents 10 units.
+         * Clamp: once amount >= 100 all segments are filled.
+         * This gives a visual "tank level" without needing text. */
+        segs_filled = amount / 10;
+        if (segs_filled > max_segs) segs_filled = max_segs;
+ 
+        for (j = 0; j < max_segs; j++) {
+            float bx = (float)(panel_x + swatch_w + 6
+                        + j * (seg_w + seg_gap));
+            SDL_FRect seg = {
+                bx, ry + 5.0f,
+                (float)seg_w, (float)(row_h - 10)
+            };
+            if (j < segs_filled) {
+                /* Filled segment: resource colour, slightly dimmed */
+                SDL_SetRenderDrawColor(renderer,
+                    (unsigned char)(RES_COL[i].r * 0.85f),
+                    (unsigned char)(RES_COL[i].g * 0.85f),
+                    (unsigned char)(RES_COL[i].b * 0.85f), 255);
+                SDL_RenderFillRect(renderer, &seg);
+            } else {
+                /* Empty segment: dark slot */
+                SDL_SetRenderDrawColor(renderer, 40, 35, 25, 255);
+                SDL_RenderFillRect(renderer, &seg);
+            }
+            /* Segment border */
+            SDL_SetRenderDrawColor(renderer, 70, 60, 40, 255);
+            SDL_RenderRect(renderer, &seg);
+        }
+    }
 }

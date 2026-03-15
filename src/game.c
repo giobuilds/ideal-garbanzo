@@ -36,6 +36,8 @@ GameState *game_init(void)
     gs->placement_valid   = 0;
     gs->menu_open         = 0;   /* CHANGED: menu starts closed */
 
+    stockpile_init(&gs->stockpile);
+
     return gs;
 }
 
@@ -60,7 +62,68 @@ void game_free(GameState *gs)
  * Mouse events arrive in window pixels; without conversion the
  * HUD hit-test and tile hover will be wrong on any window that
  * isn't exactly 1920x1080.
+ * 
+ * 
+ * CHANGED Phase 4: new function.
+ *
+ * Called once per frame with the elapsed delta time.
+ * Each active building accumulates time in its timer field.
+ * When timer >= tick_seconds a production tick fires:
+ *
+ *   1. If the building consumes a resource, check stock.
+ *      If stock is insufficient, skip this tick entirely
+ *      (building idles — will retry next tick).
+ *   2. Deduct consumed resources.
+ *   3. Add produced resources.
+ *   4. Reset timer to 0.
+ *
+ * Warehouses (tick_seconds == 0) are skipped entirely.
+ * 
  * -------------------------------------------------------- */
+static void game_tick_buildings(GameState *gs, float dt)
+{
+    int i;
+ 
+    for (i = 0; i < gs->building_count; i++) {
+        Building          *b   = &gs->buildings[i];
+        const BuildingDef *def = &BUILDING_DEFS[b->type];
+ 
+        /* Skip inactive slots and non-producing buildings */
+        if (!b->active || def->tick_seconds <= 0.0f) continue;
+ 
+        b->timer += dt;
+ 
+        if (b->timer < def->tick_seconds) continue;
+ 
+        /* Timer has expired — attempt a production tick */
+        b->timer = 0.0f;
+ 
+        /* Check input resource availability */
+        if (def->consumes != RES_COUNT) {
+            if (gs->stockpile.amount[def->consumes] < def->consume_amt) {
+                /* Not enough input — building idles this tick */
+                SDL_Log("%s idle: needs %d %s",
+                    def->name, def->consume_amt,
+                    RESOURCE_NAMES[def->consumes]);
+                continue;
+            }
+            stockpile_add(&gs->stockpile, def->consumes,
+                          -def->consume_amt);
+        }
+ 
+        /* Add output resource */
+        if (def->produces != RES_COUNT) {
+            stockpile_add(&gs->stockpile, def->produces,
+                          def->produce_amt);
+            SDL_Log("%s produced %d %s  (total: %d)",
+                def->name,
+                def->produce_amt,
+                RESOURCE_NAMES[def->produces],
+                gs->stockpile.amount[def->produces]);
+        }
+    }
+}
+
 void game_update(GameState *gs, SDL_Renderer *renderer)
 {
     float lx, ly;     /* logical mouse coordinates */
@@ -112,6 +175,8 @@ void game_update(GameState *gs, SDL_Renderer *renderer)
             gs->hovered_row, gs->hovered_col,
             NULL, 0);
     }
+
+    game_tick_buildings(gs, dt);
 }
  
 /* ---- game_place_building ------------------------------- */

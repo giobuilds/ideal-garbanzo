@@ -40,6 +40,7 @@ set(SOURCES
     src/render.c
     src/building.c
     src/ui.c
+    src/resource.c
 )
 
 # ---- Executable ------------------------------------------

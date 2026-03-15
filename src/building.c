@@ -23,6 +23,22 @@
  *    PLACE_NEEDS_FOREST → same but for TILE_FOREST.
  *    We scan all tiles in the footprint and check their
  *    four cardinal neighbours (N, S, E, W).
+ * 
+ * Building definition table  (Phase 4: production fields)
+ *
+ * Production design:
+ *   Fisher's Hut  – produces FISH from nothing (the sea is free)
+ *   Warehouse     – no production; it is a storage building
+ *   Farm          – produces GRAIN from nothing (sun and soil)
+ *   Lumberjack    – produces WOOD from nothing (the forest is free)
+ *
+ * In Phase 5 we will add consumption chains:
+ *   e.g. Fisher's Hut will consume WOOD for boat fuel,
+ *   Farm will consume tools, etc.
+ * RES_COUNT is used as a sentinel meaning "no resource".
+ *
+ * tick_seconds controls how fast each building works:
+ *   slower tick = rarer, more valuable output
  */
 
 #include "building.h"
@@ -33,11 +49,24 @@
  * Building definition table
  * ========================================================= */
 const BuildingDef BUILDING_DEFS[BUILDING_TYPE_COUNT] = {
-    /* name            w  h  flags                    R    G    B  */
-    { "Fisher's Hut",  1, 1, PLACE_NEEDS_COAST,      210, 180, 100 },
-    { "Warehouse",     2, 2, PLACE_ANY_LAND,          160, 100,  60 },
-    { "Farm",          2, 2, PLACE_NEEDS_FERTILE,      80, 160,  50 },
-    { "Lumberjack",    1, 1, PLACE_NEEDS_FOREST,      120,  80,  40 },
+    /*  name            w  h  flags                  R    G    B
+     *  produces       amt  consumes       amt  tick  */
+    {
+        "Fisher's Hut", 1, 1, PLACE_NEEDS_COAST,   210, 180, 100,
+        RES_FISH,       1,   RES_COUNT,     0,   6.0f
+    },
+    {
+        "Warehouse",    2, 2, PLACE_ANY_LAND,       160, 100,  60,
+        RES_COUNT,      0,   RES_COUNT,     0,   0.0f   /* no production */
+    },
+    {
+        "Farm",         2, 2, PLACE_NEEDS_FERTILE,   80, 160,  50,
+        RES_GRAIN,      1,   RES_COUNT,     0,   8.0f
+    },
+    {
+        "Lumberjack",   1, 1, PLACE_NEEDS_FOREST,  120,  80,  40,
+        RES_WOOD,       1,   RES_COUNT,     0,   5.0f
+    },
 };
 
 /* =========================================================
@@ -180,6 +209,7 @@ int building_place(Building buildings[], int *count,
     buildings[i].row    = row;
     buildings[i].col    = col;
     buildings[i].active = 1;
+    buildings[i].timer  = 0.0f;   /* CHANGED Phase 4: initialise timer */
     (*count)++;
 
     return i;

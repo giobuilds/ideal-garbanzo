@@ -14,10 +14,13 @@
  *   Building     – a placed INSTANCE on the map.
  *                  Has a position and refers to its def.
  *                  (like an object / instance)
+ * 
+ *                 (Phase 4: production fields added)
  * ========================================================= */
 
 #include "map.h"      /* Tile, TileType, Fertility, MAP_* */
-#include <stddef.h>   /* size_t */      /* Tile, TileType, Fertility, MAP_* */
+#include "resource.h"
+#include <stddef.h>   /* size_t */
 
 /* ---- How many buildings can be placed at once ---------- */
 #define MAX_BUILDINGS 64
@@ -50,6 +53,20 @@ typedef struct {
     PlacementFlags placement_flags;
     /* Colour for the placeholder rectangle (R, G, B) */
     unsigned char col_r, col_g, col_b;
+
+    /* CHANGED Phase 4: production fields.
+     * produces      – which resource this building outputs
+     *                 (RES_COUNT means "produces nothing")
+     * produce_amt   – units produced per tick
+     * consumes      – which resource this building needs as input
+     *                 (RES_COUNT means "needs no input")
+     * consume_amt   – units consumed per tick
+     * tick_seconds  – real-time seconds between production ticks */
+    ResourceType  produces;
+    int           produce_amt;
+    ResourceType  consumes;
+    int           consume_amt;
+    float         tick_seconds;
 } BuildingDef;
 
 /* The global table of all building definitions.
@@ -63,6 +80,12 @@ typedef struct {
     int          row;   /* top-left tile of the footprint */
     int          col;
     int          active; /* 1 = placed, 0 = empty slot     */
+
+    /* CHANGED Phase 4: time accumulator.
+     * Counts seconds since this building last produced.
+     * When timer >= def->tick_seconds a tick fires and
+     * timer resets to 0. */
+    float        timer;
 } Building;
 
 /* ---- Placement validation ----------------------------- */

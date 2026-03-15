@@ -21,6 +21,7 @@
 #include "map.h"
 #include "camera.h"
 #include "building.h"
+#include "resource.h"
 
 /* Draw the entire map for one frame.
  * Tiles are drawn back-to-front (painter's algorithm):
@@ -37,6 +38,9 @@ void render_hovered_tile(SDL_Renderer *renderer,
 
 /* Fill the screen with the background (sky / sea colour). */
 void render_clear(SDL_Renderer *renderer);
+
+void render_resources(SDL_Renderer *renderer,
+                      const Stockpile *s);
 
 /* ---- Utility: grid → screen ----------------------------
  * Exposed here so input.c can do the inverse transform
