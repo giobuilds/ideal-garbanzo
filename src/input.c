@@ -60,9 +60,27 @@ SDL_AppResult input_handle_event(InputState *input,
         input->mouse_y = (int)event->motion.y;
         break;
 
+    /* We fire click events on BUTTON_UP so the player sees
+     * where the cursor is before the action is committed.
+     * This is standard practice in strategy games. */
+    case SDL_EVENT_MOUSE_BUTTON_UP:
+        input->mouse_x = (int)event->button.x;  /* update pos on click */
+        input->mouse_y = (int)event->button.y;
+        if (event->button.button == SDL_BUTTON_LEFT)
+            input->left_click  = 1;
+        if (event->button.button == SDL_BUTTON_RIGHT)
+            input->right_click = 1;
+        break;
+
     default:
         break;
     }
 
     return SDL_APP_CONTINUE;
+}
+
+void input_clear_clicks(InputState *input)
+{
+    input->left_click  = 0;
+    input->right_click = 0;
 }

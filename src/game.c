@@ -2,8 +2,11 @@
 
 #include "game.h"
 #include "render.h"    /* screen_to_iso() */
+#include "building.h"
+#include "ui.h"
 #include <SDL3/SDL.h>  /* SDL_GetTicksNS() */
 #include <stdlib.h>    /* malloc, free    */
+#include <string.h>   /* memset */
 
 /* ---- game_init ----------------------------------------- */
 GameState *game_init(void)
@@ -14,6 +17,7 @@ GameState *game_init(void)
     uint32_t seed = (uint32_t)SDL_GetTicksNS();
     SDL_Log("Map seed: %u", seed);
     map_init(&gs->map, seed);
+
     camera_init(&gs->camera, SCREEN_W, SCREEN_H,
                 MAP_COLS, MAP_ROWS);
     input_init(&gs->input);
@@ -22,6 +26,11 @@ GameState *game_init(void)
     gs->hovered_col = -1;
     gs->last_tick   = SDL_GetTicksNS();   /* nanosecond timer – always available */
     gs->delta_time  = 0.0f;
+
+    memset(gs->buildings, 0, sizeof(gs->buildings));
+    gs->building_count    = 0;
+    gs->selected_building = BUILDING_NONE;
+    gs->placement_valid   = 0;
 
     return gs;
 }
@@ -34,23 +43,20 @@ void game_free(GameState *gs)
 
 /* ---- game_update ---------------------------------------
  * Per-frame logic:
- *   1. Pan camera based on held keys.
- *   2. Convert mouse position to hovered tile.
+ *   1. Delta time
+ *   2. Camera pan
+ *   3. Hovered tile
+ *   4. Placement validity for ghost rendering
  * -------------------------------------------------------- */
-void game_update(GameState *gs)
+void game_update(GameState *gs, SDL_Renderer *renderer)
 {
-    Uint64 now, elapsed_ns;
-    float  dt;
+    float lx, ly;     /* logical mouse coordinates */
  
     /* --- Delta time ------------------------------------ */
-    now        = SDL_GetTicksNS();
-    elapsed_ns = now - gs->last_tick;
-    gs->last_tick = now;
- 
-    /* Convert nanoseconds → seconds.  Cap at 0.1s (100ms) so a
-     * stall or breakpoint doesn't teleport the camera. */
-    dt = (float)elapsed_ns / 1000000000.0f;
+    Uint64 now = SDL_GetTicksNS();
+    float  dt  = (float)(now - gs->last_tick) / 1000000000.0f;
     if (dt > 0.1f) dt = 0.1f;
+    gs->last_tick  = now;
     gs->delta_time = dt;
 
     /* --- Camera panning -------------------------------- */
@@ -59,15 +65,52 @@ void game_update(GameState *gs)
     if (gs->input.pan_up)    gs->camera.offset_y += CAMERA_PAN_SPEED * dt;
     if (gs->input.pan_down)  gs->camera.offset_y -= CAMERA_PAN_SPEED * dt;
 
-    /* --- 2. Hovered tile ------------------------------- */
-    screen_to_iso(gs->input.mouse_x, gs->input.mouse_y,
-                  &gs->camera,
-                  &gs->hovered_row, &gs->hovered_col);
-
-    /* Clamp to valid range (-1 signals "off map") */
-    if (gs->hovered_row < 0 || gs->hovered_row >= MAP_ROWS ||
-        gs->hovered_col < 0 || gs->hovered_col >= MAP_COLS) {
+    /* --- Convert mouse from window pixels to logical coords --- */
+    SDL_RenderCoordinatesFromWindow(renderer,
+        (float)gs->input.mouse_x, (float)gs->input.mouse_y,
+        &lx, &ly);
+ 
+    /* Store converted coords back so HUD and tile picker agree */
+    gs->input.logical_x = (int)lx;   /* CHANGED: new fields, see game.h */
+    gs->input.logical_y = (int)ly;
+ 
+    /* --- Hovered tile ---------------------------------- */
+    if (gs->input.logical_y < SCREEN_H - HUD_HEIGHT) {
+        screen_to_iso(gs->input.logical_x, gs->input.logical_y,
+                      &gs->camera,
+                      &gs->hovered_row, &gs->hovered_col);
+ 
+        if (gs->hovered_row < 0 || gs->hovered_row >= MAP_ROWS ||
+            gs->hovered_col < 0 || gs->hovered_col >= MAP_COLS) {
+            gs->hovered_row = -1;
+            gs->hovered_col = -1;
+        }
+    } else {
         gs->hovered_row = -1;
         gs->hovered_col = -1;
     }
+ 
+    /* --- Placement validity ---------------------------- */
+    gs->placement_valid = 0;
+    if (gs->selected_building != BUILDING_NONE && gs->hovered_row >= 0) {
+        gs->placement_valid = building_can_place(
+            &gs->map,
+            gs->selected_building,
+            gs->hovered_row, gs->hovered_col,
+            NULL, 0);
+    }
+}
+ 
+/* ---- game_place_building ------------------------------- */
+void game_place_building(GameState *gs)
+{
+    if (gs->selected_building == BUILDING_NONE) return;
+    if (gs->hovered_row < 0) return;
+ 
+    building_place(gs->buildings, &gs->building_count,
+                   &gs->map,
+                   gs->selected_building,
+                   gs->hovered_row, gs->hovered_col);
+    /* Note: we intentionally keep the building selected after
+     * placing so the player can rapidly place multiple copies. */
 }

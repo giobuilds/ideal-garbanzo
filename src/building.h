@@ -1,0 +1,87 @@
+#ifndef BUILDING_H
+#define BUILDING_H
+
+/* =========================================================
+ * building.h  --  Building types, definitions, instances
+ *
+ * There are two distinct concepts here, keep them separate
+ * in your mind:
+ *
+ *   BuildingDef  – static data about a TYPE of building.
+ *                  One entry per building type, never changes.
+ *                  (like a class definition)
+ *
+ *   Building     – a placed INSTANCE on the map.
+ *                  Has a position and refers to its def.
+ *                  (like an object / instance)
+ * ========================================================= */
+
+#include "map.h"      /* Tile, TileType, Fertility, MAP_* */
+#include <stddef.h>   /* size_t */      /* Tile, TileType, Fertility, MAP_* */
+
+/* ---- How many buildings can be placed at once ---------- */
+#define MAX_BUILDINGS 64
+
+/* ---- Building type identifiers ------------------------- */
+typedef enum {
+    BUILDING_NONE       = -1,   /* sentinel: nothing selected */
+    BUILDING_FISHERS_HUT = 0,
+    BUILDING_WAREHOUSE   = 1,
+    BUILDING_FARM        = 2,
+    BUILDING_LUMBERJACK  = 3,
+    BUILDING_TYPE_COUNT
+} BuildingType;
+
+/* ---- Placement rule flags (bitmask) --------------------
+ * Stored in BuildingDef.placement_flags.
+ * The placement validator checks these against the map. */
+typedef enum {
+    PLACE_ANY_LAND     = 0,        /* no extra constraint      */
+    PLACE_NEEDS_COAST  = 1 << 0,   /* adjacent water required  */
+    PLACE_NEEDS_FOREST = 1 << 1,   /* adjacent forest required */
+    PLACE_NEEDS_FERTILE= 1 << 2,   /* all tiles must be fertile*/
+} PlacementFlags;
+
+/* ---- Static definition of one building type ------------ */
+typedef struct {
+    const char   *name;
+    int           tile_w;          /* footprint width  in tiles */
+    int           tile_h;          /* footprint height in tiles */
+    PlacementFlags placement_flags;
+    /* Colour for the placeholder rectangle (R, G, B) */
+    unsigned char col_r, col_g, col_b;
+} BuildingDef;
+
+/* The global table of all building definitions.
+ * Defined in building.c, declared here for all to use.
+ * Indexed by BuildingType. */
+extern const BuildingDef BUILDING_DEFS[BUILDING_TYPE_COUNT];
+
+/* ---- One placed building instance --------------------- */
+typedef struct {
+    BuildingType type;
+    int          row;   /* top-left tile of the footprint */
+    int          col;
+    int          active; /* 1 = placed, 0 = empty slot     */
+} Building;
+
+/* ---- Placement validation ----------------------------- */
+
+/* Returns 1 if the building of `type` can be placed with its
+ * top-left corner at (row, col) on `map`.
+ * Returns 0 and sets reason[0..reason_len] to a short message
+ * explaining why not (useful for a future status bar).
+ * Pass NULL for reason if you don't need the message. */
+int building_can_place(const Map *map,
+                       BuildingType type,
+                       int row, int col,
+                       char *reason, size_t reason_len);
+
+/* Place a building into the buildings array.
+ * Returns the index of the new building, or -1 if the array
+ * is full or placement is invalid. */
+int building_place(Building buildings[], int *count,
+                   const Map *map,
+                   BuildingType type, int row, int col);
+
+#endif /* BUILDING_H */

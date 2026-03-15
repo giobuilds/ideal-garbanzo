@@ -14,10 +14,16 @@
  *  where (sx, sy) is the top-left corner of the tile's
  *  bounding box, NOT the top point of the diamond.
  *  iso_to_screen() returns the top-left corner.
+ * 
+ * New in Phase 3:
+ *    render_buildings() – draws placed building footprints
+ *    render_ghost()     – draws a transparent placement preview
+ *                         green = valid, red = invalid
  */
 
 #include "render.h"
 #include "game.h"   /* SCREEN_W, SCREEN_H */
+#include "building.h"
 #include <SDL3/SDL.h>
 
 /* ---- Colour table (R, G, B, A) for each TileType ------- */
@@ -83,58 +89,60 @@ void screen_to_iso(int sx, int sy, const Camera *cam,
  * -------------------------------------------------------- */
 static void draw_diamond(SDL_Renderer *renderer,
                          int bx, int by,
-                         SDL_Color top_col, SDL_Color left_col)
+                         SDL_Color top_col, SDL_Color bot_col)
 {
-    /* The four corners of the diamond */
     int half_w = TILE_W / 2;
     int half_h = TILE_H / 2;
-
     SDL_Vertex verts[4];
-    int i;
-
-    /* top point  */
+    int indices[6] = { 0,1,2, 0,3,2 };
+ 
     verts[0].position.x = (float)(bx + half_w);
     verts[0].position.y = (float)(by);
-
-    /* left point */
     verts[1].position.x = (float)(bx);
     verts[1].position.y = (float)(by + half_h);
-
-    /* bottom point */
     verts[2].position.x = (float)(bx + half_w);
     verts[2].position.y = (float)(by + TILE_H);
-
-    /* right point */
     verts[3].position.x = (float)(bx + TILE_W);
     verts[3].position.y = (float)(by + half_h);
-
-    /* Assign colours: top-right triangle gets the bright colour,
-     * left-bottom triangle gets the darker shade for depth. */
-    for (i = 0; i < 4; i++) {
-        verts[i].tex_coord.x = 0.0f;
-        verts[i].tex_coord.y = 0.0f;
-    }
-
-    /* Top half (top, left, right) — bright face */
-    verts[0].color.r = top_col.r / 255.0f;
-    verts[0].color.g = top_col.g / 255.0f;
-    verts[0].color.b = top_col.b / 255.0f;
-    verts[0].color.a = 1.0f;
-
-    verts[1].color = verts[0].color;   /* left = same as top  */
-    verts[3].color = verts[0].color;   /* right = same as top */
-
-    /* Bottom half vertex gets the dark shade */
-    verts[2].color.r = left_col.r / 255.0f;
-    verts[2].color.g = left_col.g / 255.0f;
-    verts[2].color.b = left_col.b / 255.0f;
-    verts[2].color.a = 1.0f;
-
-    /* Triangle 1: top, left, bottom */
-    /* Triangle 2: top, right, bottom */
-    int indices[6] = { 0, 1, 2,   0, 3, 2 };
-
+ 
+    verts[0].tex_coord.x = 0.0f; verts[0].tex_coord.y = 0.0f;
+    verts[1].tex_coord.x = 0.0f; verts[1].tex_coord.y = 0.0f;
+    verts[2].tex_coord.x = 0.0f; verts[2].tex_coord.y = 0.0f;
+    verts[3].tex_coord.x = 0.0f; verts[3].tex_coord.y = 0.0f;
+ 
+    /* top, left, right faces — bright colour */
+    verts[0].color.r = top_col.r/255.0f; verts[0].color.g = top_col.g/255.0f;
+    verts[0].color.b = top_col.b/255.0f; verts[0].color.a = top_col.a/255.0f;
+    verts[1].color = verts[0].color;
+    verts[3].color = verts[0].color;
+ 
+    /* bottom face — dark colour */
+    verts[2].color.r = bot_col.r/255.0f; verts[2].color.g = bot_col.g/255.0f;
+    verts[2].color.b = bot_col.b/255.0f; verts[2].color.a = bot_col.a/255.0f;
+ 
     SDL_RenderGeometry(renderer, NULL, verts, 4, indices, 6);
+}
+
+static void draw_diamond_outline(SDL_Renderer *renderer,
+                                 int bx, int by,
+                                 unsigned char r, unsigned char g,
+                                 unsigned char b, unsigned char a)
+{
+    int hw = TILE_W / 2;
+    int hh = TILE_H / 2;
+    SDL_SetRenderDrawColor(renderer, r, g, b, a);
+    SDL_RenderLine(renderer,
+        (float)(bx+hw),   (float)(by),
+        (float)(bx),      (float)(by+hh));
+    SDL_RenderLine(renderer,
+        (float)(bx),      (float)(by+hh),
+        (float)(bx+hw),   (float)(by+TILE_H));
+    SDL_RenderLine(renderer,
+        (float)(bx+hw),   (float)(by+TILE_H),
+        (float)(bx+TILE_W),(float)(by+hh));
+    SDL_RenderLine(renderer,
+        (float)(bx+TILE_W),(float)(by+hh),
+        (float)(bx+hw),   (float)(by));
 }
 
 /* ---- render_clear -------------------------------------- */
@@ -205,4 +213,76 @@ void render_hovered_tile(SDL_Renderer *renderer,
     SDL_RenderLine(renderer,
         (float)(sx + TILE_W), (float)(sy + hh),   /* right */
         (float)(sx + hw), (float)(sy));            /* top   */
+}
+/* ---- render_buildings ----------------------------------
+ * For each placed building, draw a coloured diamond over
+ * every tile in its footprint, plus a bright border.
+ * -------------------------------------------------------- */
+void render_buildings(SDL_Renderer *renderer,
+                      const Building buildings[], int count,
+                      const Camera *cam)
+{
+    int i, r, c, sx, sy;
+ 
+    for (i = 0; i < count; i++) {
+        const Building    *b   = &buildings[i];
+        const BuildingDef *def = &BUILDING_DEFS[b->type];
+        SDL_Color top, bot;
+ 
+        if (!b->active) continue;
+ 
+        top.r = def->col_r;
+        top.g = def->col_g;
+        top.b = def->col_b;
+        top.a = 255;
+        bot.r = (unsigned char)(def->col_r * 0.7f);
+        bot.g = (unsigned char)(def->col_g * 0.7f);
+        bot.b = (unsigned char)(def->col_b * 0.7f);
+        bot.a = 255;
+ 
+        for (r = b->row; r < b->row + def->tile_h; r++) {
+            for (c = b->col; c < b->col + def->tile_w; c++) {
+                iso_to_screen(r, c, cam, &sx, &sy);
+                draw_diamond(renderer, sx, sy, top, bot);
+                draw_diamond_outline(renderer, sx, sy,
+                    255, 255, 255, 60);
+            }
+        }
+    }
+}
+ 
+/* ---- render_ghost --------------------------------------
+ * Semi-transparent preview of where a building will land.
+ * Green tint = valid, red tint = invalid.
+ * -------------------------------------------------------- */
+void render_ghost(SDL_Renderer *renderer,
+                  const Camera *cam,
+                  BuildingType type,
+                  int row, int col,
+                  int valid)
+{
+    const BuildingDef *def = &BUILDING_DEFS[type];
+    int r, c, sx, sy;
+    SDL_Color top, bot;
+ 
+    if (row < 0 || col < 0) return;
+ 
+    if (valid) {
+        /* Green tint overlay */
+        top.r = 80;  top.g = 200; top.b = 80;  top.a = 180;
+        bot.r = 50;  bot.g = 140; bot.b = 50;  bot.a = 180;
+    } else {
+        /* Red tint overlay */
+        top.r = 200; top.g = 60;  top.b = 60;  top.a = 180;
+        bot.r = 140; bot.g = 40;  bot.b = 40;  bot.a = 180;
+    }
+ 
+    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+    for (r = row; r < row + def->tile_h; r++) {
+        for (c = col; c < col + def->tile_w; c++) {
+            iso_to_screen(r, c, cam, &sx, &sy);
+            draw_diamond(renderer, sx, sy, top, bot);
+        }
+    }
+    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
 }

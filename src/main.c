@@ -22,6 +22,9 @@
 
 #include "game.h"
 #include "render.h"
+#include "ui.h"
+
+typedef struct { SDL_Window *w; SDL_Renderer *r; GameState *g; } App;
 
 /* ---- SDL_AppInit ---------------------------------------
  * One-time setup: create the window and renderer, then
@@ -32,6 +35,7 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[])
 {
     SDL_Window   *window   = NULL;
     SDL_Renderer *renderer = NULL;
+    App          *app      = NULL;
     GameState    *gs       = NULL;
 
     /* Suppress unused-parameter warning for argv/argc
@@ -41,9 +45,9 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[])
 
     /* --- App metadata ---------------------------------- */
     SDL_SetAppMetadataProperty(SDL_PROP_APP_METADATA_NAME_STRING,
-                               "Anno-Clone");
+                               "Anno Clone");
     SDL_SetAppMetadataProperty(SDL_PROP_APP_METADATA_VERSION_STRING,
-                               "0.1.0");
+                               "0.3.0");
     SDL_SetAppMetadataProperty(SDL_PROP_APP_METADATA_IDENTIFIER_STRING,
                                "com.giovannidick.annoclone");
     SDL_SetAppMetadataProperty(SDL_PROP_APP_METADATA_CREATOR_STRING,
@@ -60,11 +64,9 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[])
     }
 
     /* --- Window & renderer ----------------------------- */
-    if (!SDL_CreateWindowAndRenderer("Anno Clone  –  Phase 1",
-                                     SCREEN_W, SCREEN_H,
-                                     0,           /* no special flags */
-                                     &window,
-                                     &renderer)) {
+    if (!SDL_CreateWindowAndRenderer("Anno Clone - Phase 3",
+                                     SCREEN_W, SCREEN_H, 0,           /* no special flags */
+                                     &window, &renderer)) {
         SDL_Log("Couldn't create window/renderer: %s", SDL_GetError());
         return SDL_APP_FAILURE;
     }
@@ -84,8 +86,7 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[])
 
     /* Pack both pointers into appstate.
      * We use a small heap struct so AppQuit can free them. */
-    typedef struct { SDL_Window *w; SDL_Renderer *r; GameState *g; } App;
-    App *app = (App *)SDL_malloc(sizeof(App));
+    app = (App *)SDL_malloc(sizeof(App));
     if (!app) {
         game_free(gs);
         SDL_Log("Couldn't allocate app struct");
@@ -97,7 +98,7 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[])
 
     *appstate = app;
 
-    SDL_Log("Anno Clone Phase 1 started. WASD / arrows to pan.");
+    SDL_Log("Phase 3 ready. Click HUD to select, click map to place.");
     return SDL_APP_CONTINUE;
 }
 
@@ -106,7 +107,6 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[])
  * -------------------------------------------------------- */
 SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event)
 {
-    typedef struct { SDL_Window *w; SDL_Renderer *r; GameState *g; } App;
     App *app = (App *)appstate;
 
     return input_handle_event(&app->g->input, event);
@@ -117,26 +117,62 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event)
  * -------------------------------------------------------- */
 SDL_AppResult SDL_AppIterate(void *appstate)
 {
-    typedef struct { SDL_Window *w; SDL_Renderer *r; GameState *g; } App;
     App *app = (App *)appstate;
-
-    /* 1. Update game logic (camera pan, hovered tile) */
-    game_update(app->g);
-
-    /* 2. Clear the screen */
+    GameState *gs = app->g;
+ 
+    /* --- Update ----------------------------------------- */
+    game_update(gs, app->r);
+    
+    /* --- Handle clicks ---------------------------------- */
+ 
+    /* Left click on HUD → select building type */
+    if (gs->input.left_click) {
+        BuildingType hud_hit = ui_hit_test(SCREEN_W, SCREEN_H,
+                                           gs->input.logical_x,
+                                           gs->input.logical_y);
+        if (hud_hit != BUILDING_NONE) {
+            /* Toggle: clicking the same button deselects it */
+            gs->selected_building =
+                (gs->selected_building == hud_hit)
+                ? BUILDING_NONE : hud_hit;
+        } else {
+            /* Left click on map → place building */
+            game_place_building(gs);
+        }
+    }
+ 
+    /* Right click → deselect */
+    if (gs->input.right_click) {
+        gs->selected_building = BUILDING_NONE;
+    }
+ 
+    
+ 
+    input_clear_clicks(&gs->input);
+ 
+    /* --- Render ----------------------------------------- */
     render_clear(app->r);
-
-    /* 3. Draw the tile map */
-    render_map(app->r, &app->g->map, &app->g->camera);
-
-    /* 4. Draw hover highlight on top of tiles */
-    render_hovered_tile(app->r, &app->g->camera,
-                        app->g->hovered_row,
-                        app->g->hovered_col);
-
-    /* 5. Push the finished frame to the screen */
+    render_map(app->r, &gs->map, &gs->camera);
+    render_buildings(app->r, gs->buildings,
+                     gs->building_count, &gs->camera);
+ 
+    /* Ghost: only when a building is selected and cursor on map */
+    if (gs->selected_building != BUILDING_NONE && gs->hovered_row >= 0)
+        render_ghost(app->r, &gs->camera,
+                     gs->selected_building,
+                     gs->hovered_row, gs->hovered_col,
+                     gs->placement_valid);
+ 
+    /* Hover outline — draw on top of ghost */
+    render_hovered_tile(app->r, &gs->camera,
+                        gs->hovered_row, gs->hovered_col);
+ 
+    /* HUD on top of everything */
+    ui_draw(app->r, SCREEN_W, SCREEN_H,
+            gs->selected_building,
+            gs->input.logical_x, gs->input.logical_y);
+ 
     SDL_RenderPresent(app->r);
-
     return SDL_APP_CONTINUE;
 }
 
@@ -146,7 +182,6 @@ SDL_AppResult SDL_AppIterate(void *appstate)
  * -------------------------------------------------------- */
 void SDL_AppQuit(void *appstate, SDL_AppResult result)
 {
-    typedef struct { SDL_Window *w; SDL_Renderer *r; GameState *g; } App;
     App *app = (App *)appstate;
 
     (void)result;   /* not checking exit code in Phase 1 */

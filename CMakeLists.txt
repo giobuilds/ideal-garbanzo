@@ -38,6 +38,8 @@ set(SOURCES
     src/camera.c
     src/input.c
     src/render.c
+    src/building.c
+    src/ui.c
 )
 
 # ---- Executable ------------------------------------------

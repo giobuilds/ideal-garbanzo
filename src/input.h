@@ -10,6 +10,11 @@
  * speed (Phase 1).
  *
  * Mouse position is stored in screen pixels.
+ * 
+ * New in Phase 3:
+ *   left_click  – fired for one frame when LMB released
+ *   right_click – fired for one frame when RMB released
+ *   These are consumed by game logic then cleared.
  * ========================================================= */
 
 #include <SDL3/SDL.h>
@@ -22,8 +27,14 @@ typedef struct {
     int pan_down;
 
     /* Mouse cursor position in screen pixels */
-    int mouse_x;
-    int mouse_y;
+    int mouse_x, mouse_y;
+    int logical_x, logical_y;
+
+    /* Single-frame click events.
+     * Set to 1 when the button is released, cleared to 0
+     * after game logic has consumed them. */
+    int left_click;
+    int right_click;
 } InputState;
 
 /* Initialise all fields to 0. */
@@ -34,5 +45,9 @@ void input_init(InputState *input);
  * SDL_APP_CONTINUE otherwise. */
 SDL_AppResult input_handle_event(InputState *input,
                                  const SDL_Event *event);
+
+ /* Call once per frame AFTER game logic has read the clicks.
+ * Resets left_click and right_click to 0. */
+void input_clear_clicks(InputState *input);                           
 
 #endif /* INPUT_H */

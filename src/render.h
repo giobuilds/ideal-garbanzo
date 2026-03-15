@@ -20,6 +20,7 @@
 #include <SDL3/SDL.h>
 #include "map.h"
 #include "camera.h"
+#include "building.h"
 
 /* Draw the entire map for one frame.
  * Tiles are drawn back-to-front (painter's algorithm):
@@ -48,4 +49,15 @@ void iso_to_screen(int row, int col, const Camera *cam,
 void screen_to_iso(int sx, int sy, const Camera *cam,
                    int *out_row, int *out_col);
 
+
+void render_buildings(SDL_Renderer *renderer,
+                      const Building buildings[], int count,
+                      const Camera *cam);
+ 
+void render_ghost(SDL_Renderer *renderer,
+                  const Camera *cam,
+                  BuildingType type,
+                  int row, int col,
+                  int valid);
+                                     
 #endif /* RENDER_H */
