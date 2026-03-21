@@ -1,3 +1,8 @@
+to build
+cmake -B build -DCMAKE_BUILD_TYPE=debug
+cmake --build build -j$(nproc)
+./build/anno_clone
+
 # Project Architecture (High Level)
 anno1800-clone/
 ├── src/
@@ -76,3 +81,15 @@ Fix isometric tile hit-test accuracy in screen_to_iso()
 - Production rates: Lumberjack 5s, Fisher's Hut 6s, Farm 8s
 - RES_COUNT used as sentinel for "no resource" in building definitions
 - Add resource.c to CMakeLists.txt
+
+# Phase 5: SDL_ttf text rendering and population system
+
+- Add fonts.h/c wrapping SDL_ttf (Liberation Sans, 14pt/11pt)
+- Real text in resource panel, HUD tooltips, menu labels and title
+- Add PopData struct with per-house residents, timer, happiness
+- House building type (1x1, any land, 10 residents capacity)
+- Needs tick every 30s: Fish AND Grain required
+- Needs met: consume 1 each, generate 2 gold per resident, grow
+- Needs unmet: lose 1 resident per tick
+- Population counter top-right (Pop: N)
+- Link SDL3_ttf in CMakeLists.txt

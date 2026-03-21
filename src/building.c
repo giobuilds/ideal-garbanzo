@@ -67,6 +67,11 @@ const BuildingDef BUILDING_DEFS[BUILDING_TYPE_COUNT] = {
         "Lumberjack",   1, 1, PLACE_NEEDS_FOREST,  120,  80,  40,
         RES_WOOD,       1,   RES_COUNT,     0,   5.0f
     },
+    /* Phase 5: House — residents live here, generate gold when fed */
+    {
+        "House",        1, 1, PLACE_ANY_LAND,      210, 190, 160,
+        RES_COUNT,      0,   RES_COUNT,     0,   0.0f   /* pop_update handles gold, not tick system */
+    },
 };
 
 /* =========================================================

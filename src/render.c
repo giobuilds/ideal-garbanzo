@@ -24,6 +24,7 @@
 #include "render.h"
 #include "game.h"   /* SCREEN_W, SCREEN_H */
 #include "building.h"
+#include "fonts.h"    /* Phase 5 */
 #include <SDL3/SDL.h>
 #include <math.h>   /* floorf() */
 
@@ -309,6 +310,12 @@ void render_ghost(SDL_Renderer *renderer,
  * is encoded as a segmented bar — each filled segment = 10
  * units, so the bar fills up visually as resources grow.
  * Max bar width represents 100 units (10 segments).
+ * 
+ * Phase 5 update: real text via font_draw_text() replaces
+ * the stub placeholder bars.  Layout per row:
+ *   [colour swatch]  [name]  [amount]
+ * The segmented bar is kept alongside the number as a
+ * quick visual indicator of stock level.
  * -------------------------------------------------------- */
 void render_resources(SDL_Renderer *renderer,
                       const Stockpile *s)
@@ -321,16 +328,21 @@ void render_resources(SDL_Renderer *renderer,
         { 255, 195,   0, 255 },   /* GOLD  — gold   */
     };
  
-    int        i;
-    int        panel_x  = 16;
-    int        panel_y  = 16;
-    int        row_h    = 22;
-    int        swatch_w = 14;
-    int        seg_w    = 8;    /* width of one bar segment  */
-    int        seg_gap  = 2;    /* gap between segments      */
-    int        max_segs = 10;   /* bar represents 0–100 units */
-    int        panel_w  = swatch_w + 6 + max_segs * (seg_w + seg_gap) + 8;
-    int        panel_h  = RES_COUNT * row_h + 10;
+    SDL_Color text_col  = { 220, 200, 160, 255 };
+    SDL_Color label_col = { 160, 140, 100, 255 };
+ 
+    int   i;
+    int   panel_x  = 16;
+    int   panel_y  = 16;
+    int   row_h    = 22;
+    int   swatch_w = 12;
+    int   seg_w    = 7;
+    int   seg_gap  = 2;
+    int   max_segs = 10;
+    int   bar_x    = panel_x + swatch_w + 6;
+    int   num_x    = bar_x + max_segs * (seg_w + seg_gap) + 8;
+    int   panel_w  = num_x + 52;
+    int   panel_h  = RES_COUNT * row_h + 10;
  
     /* Panel background */
     SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
@@ -347,9 +359,10 @@ void render_resources(SDL_Renderer *renderer,
     /* One row per resource */
     for (i = 0; i < RES_COUNT; i++) {
         int   amount = s->amount[i];
-        int   segs_filled;
+        int   segs   = amount / 10;
         int   j;
-        float ry = (float)(panel_y + i * row_h);
+        float ry     = (float)(panel_y + i * row_h);
+        char  buf[16];
  
         /* Colour swatch */
         SDL_FRect swatch = {
@@ -360,35 +373,58 @@ void render_resources(SDL_Renderer *renderer,
             RES_COL[i].r, RES_COL[i].g, RES_COL[i].b, 255);
         SDL_RenderFillRect(renderer, &swatch);
  
-        /* Segmented amount bar.
-         * Each segment represents 10 units.
-         * Clamp: once amount >= 100 all segments are filled.
-         * This gives a visual "tank level" without needing text. */
-        segs_filled = amount / 10;
-        if (segs_filled > max_segs) segs_filled = max_segs;
- 
+        /* Segmented bar */
+        if (segs > max_segs) segs = max_segs;
         for (j = 0; j < max_segs; j++) {
-            float bx = (float)(panel_x + swatch_w + 6
-                        + j * (seg_w + seg_gap));
-            SDL_FRect seg = {
-                bx, ry + 5.0f,
-                (float)seg_w, (float)(row_h - 10)
-            };
-            if (j < segs_filled) {
-                /* Filled segment: resource colour, slightly dimmed */
+            float bx = (float)(bar_x + j * (seg_w + seg_gap));
+            SDL_FRect seg = { bx, ry + 5.0f,
+                              (float)seg_w, (float)(row_h - 10) };
+            if (j < segs)
                 SDL_SetRenderDrawColor(renderer,
                     (unsigned char)(RES_COL[i].r * 0.85f),
                     (unsigned char)(RES_COL[i].g * 0.85f),
                     (unsigned char)(RES_COL[i].b * 0.85f), 255);
-                SDL_RenderFillRect(renderer, &seg);
-            } else {
-                /* Empty segment: dark slot */
+            else
                 SDL_SetRenderDrawColor(renderer, 40, 35, 25, 255);
-                SDL_RenderFillRect(renderer, &seg);
-            }
-            /* Segment border */
+            SDL_RenderFillRect(renderer, &seg);
             SDL_SetRenderDrawColor(renderer, 70, 60, 40, 255);
             SDL_RenderRect(renderer, &seg);
         }
+ 
+        /* Resource name (small font, dim) */
+        font_draw_text(renderer, FONT_SMALL,
+                       RESOURCE_NAMES[i],
+                       num_x, (int)ry + 1, label_col);
+ 
+        /* Amount number (normal font, bright) */
+        SDL_snprintf(buf, sizeof(buf), "%d", amount);
+        font_draw_text(renderer, FONT_NORMAL,
+                       buf, num_x + 38, (int)ry, text_col);
     }
+}
+
+/* ---- render_population ---------------------------------
+ * Phase 5: draws total population count in the top-right
+ * corner of the screen.
+ * -------------------------------------------------------- */
+void render_population(SDL_Renderer *renderer,
+                        int total_pop,
+                        int screen_w)
+{
+    char buf[32];
+    SDL_Color col = { 200, 230, 200, 255 };
+ 
+    SDL_snprintf(buf, sizeof(buf), "Pop: %d", total_pop);
+ 
+    /* Simple background pill */
+    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+    SDL_SetRenderDrawColor(renderer, 20, 16, 10, 200);
+    SDL_FRect bg = { (float)(screen_w - 110), 10.0f, 100.0f, 24.0f };
+    SDL_RenderFillRect(renderer, &bg);
+    SDL_SetRenderDrawColor(renderer, 90, 75, 45, 180);
+    SDL_RenderRect(renderer, &bg);
+    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
+ 
+    font_draw_text(renderer, FONT_NORMAL, buf,
+                   screen_w - 105, 13, col);
 }

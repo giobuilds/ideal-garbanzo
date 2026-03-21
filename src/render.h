@@ -22,6 +22,7 @@
 #include "camera.h"
 #include "building.h"
 #include "resource.h"
+#include "population.h"   /* Phase 5 */
 
 /* Draw the entire map for one frame.
  * Tiles are drawn back-to-front (painter's algorithm):
@@ -63,5 +64,16 @@ void render_ghost(SDL_Renderer *renderer,
                   BuildingType type,
                   int row, int col,
                   int valid);
+
+/* Phase 5: population counter top-right */
+void render_population(SDL_Renderer *renderer,
+                       int total_pop,
+                       int screen_w);
+ 
+void iso_to_screen(int row, int col, const Camera *cam,
+                   int *out_x, int *out_y);
+ 
+void screen_to_iso(int sx, int sy, const Camera *cam,
+                   int *out_row, int *out_col);
                                      
 #endif /* RENDER_H */

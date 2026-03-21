@@ -32,6 +32,7 @@ typedef enum {
     BUILDING_WAREHOUSE   = 1,
     BUILDING_FARM        = 2,
     BUILDING_LUMBERJACK  = 3,
+    BUILDING_HOUSE       =  4,   /* Phase 5 */
     BUILDING_TYPE_COUNT
 } BuildingType;
 

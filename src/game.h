@@ -13,6 +13,8 @@
  *   - buildings[] array + building_count
  *   - selected_building (what the player has picked to place)
  *   - placement_valid flag (can we place at the hovered tile?)
+ * 
+ * New in Phase 5: PopData array and fonts added.
  * ========================================================= */
 
 #include <SDL3/SDL.h>
@@ -21,6 +23,7 @@
 #include "input.h"
 #include "building.h"
 #include "resource.h"
+#include "population.h"   /* Phase 5 */
 
 #define SCREEN_W 1920
 #define SCREEN_H 1080
@@ -56,6 +59,11 @@ typedef struct {
 
     int menu_open;  /* 1 when the cog menu overlay is open */
     Stockpile stockpile;
+
+    /* Phase 5: one PopData per building slot.
+     * Only slots where buildings[i].type == BUILDING_HOUSE
+     * and pop_data[i].active == 1 are meaningful. */
+    PopData      pop_data[MAX_BUILDINGS];
 } GameState;
 
 /* Allocate and initialise a new GameState.

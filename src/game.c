@@ -3,6 +3,8 @@
 #include "game.h"
 #include "render.h"    /* screen_to_iso() */
 #include "building.h"
+#include "resource.h"
+#include "population.h"
 #include "ui.h"
 #include <SDL3/SDL.h>  /* SDL_GetTicksNS() */
 #include <stdlib.h>    /* malloc, free    */
@@ -177,18 +179,28 @@ void game_update(GameState *gs, SDL_Renderer *renderer)
     }
 
     game_tick_buildings(gs, dt);
+
+    /* Phase 5: update population needs */
+    pop_update(gs->pop_data, gs->building_count, &gs->stockpile, dt);
 }
  
-/* ---- game_place_building ------------------------------- */
+/* ---- game_place_building -------------------------------
+ * Phase 5: when a House is placed, initialise its PopData.
+ * -------------------------------------------------------- */
 void game_place_building(GameState *gs)
 {
+    int idx;
+    
     if (gs->selected_building == BUILDING_NONE) return;
     if (gs->hovered_row < 0) return;
  
-    building_place(gs->buildings, &gs->building_count,
-                   &gs->map,
-                   gs->selected_building,
-                   gs->hovered_row, gs->hovered_col);
+    idx = building_place(gs->buildings, &gs->building_count,
+                         &gs->map, gs->selected_building,
+                         gs->hovered_row, gs->hovered_col);
     /* Note: we intentionally keep the building selected after
      * placing so the player can rapidly place multiple copies. */
+
+    /* Phase 5: if a house was just placed, activate its PopData */
+    if (idx >= 0 && gs->selected_building == BUILDING_HOUSE)
+        pop_init(&gs->pop_data[idx]);
 }
