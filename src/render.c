@@ -13,7 +13,6 @@
 #include "game.h"
 #include "building.h"
 #include "fonts.h"
-#include "sprite.h"    /* CHANGED Phase 6 */
 #include <SDL3/SDL.h>
 #include <math.h>
 
@@ -35,17 +34,22 @@ static const SDL_Color TILE_DARK[TILE_TYPE_COUNT] = {
  * Coordinate conversion
  * ========================================================= */
 void iso_to_screen(int row, int col, const Camera *cam,
-                   int *out_x, int *out_y)
+                   float *out_x, float *out_y)
 {
-    *out_x = (int)cam->offset_x + (col - row) * (TILE_W / 2);
-    *out_y = (int)cam->offset_y + (col + row) * (TILE_H / 2);
+    /* CHANGED: float output so zoomed tile corners sit flush.
+     * Integer truncation caused sub-pixel gaps between tiles. */
+    float hw = (float)(TILE_W / 2) * cam->zoom;
+    float hh = (float)(TILE_H / 2) * cam->zoom;
+    *out_x = cam->offset_x + (float)(col - row) * hw;
+    *out_y = cam->offset_y + (float)(col + row) * hh;
 }
 
 void screen_to_iso(int sx, int sy, const Camera *cam,
                    int *out_row, int *out_col)
 {
-    float hw = (float)(TILE_W / 2);
-    float hh = (float)(TILE_H / 2);
+    /* CHANGED: scale half-tile dimensions by zoom before inverting. */
+    float hw = (float)(TILE_W / 2) * cam->zoom;
+    float hh = (float)(TILE_H / 2) * cam->zoom;
     float px = (float)sx - cam->offset_x - hw;
     float py = (float)sy - cam->offset_y - hh;
     *out_col = (int)floorf( (px / hw + py / hh) / 2.0f );
@@ -56,22 +60,26 @@ void screen_to_iso(int sx, int sy, const Camera *cam,
  * Fallback diamond drawing (no sprites)
  * ========================================================= */
 static void draw_diamond(SDL_Renderer *renderer,
-                         int bx, int by,
+                         float bx, float by, float zoom,
                          SDL_Color top_col, SDL_Color bot_col)
 {
-    int half_w = TILE_W / 2;
-    int half_h = TILE_H / 2;
+    /* CHANGED: tile dimensions scaled by zoom so drawn size matches
+     * the spacing produced by iso_to_screen — eliminates gaps. */
+    float tw = (float)TILE_W * zoom;
+    float th = (float)TILE_H * zoom;
+    float hw = tw / 2.0f;
+    float hh = th / 2.0f;
     SDL_Vertex verts[4];
     int indices[6] = { 0,1,2, 0,3,2 };
 
-    verts[0].position.x = (float)(bx + half_w);
-    verts[0].position.y = (float)(by);
-    verts[1].position.x = (float)(bx);
-    verts[1].position.y = (float)(by + half_h);
-    verts[2].position.x = (float)(bx + half_w);
-    verts[2].position.y = (float)(by + TILE_H);
-    verts[3].position.x = (float)(bx + TILE_W);
-    verts[3].position.y = (float)(by + half_h);
+    verts[0].position.x = bx + hw;
+    verts[0].position.y = by;
+    verts[1].position.x = bx;
+    verts[1].position.y = by + hh;
+    verts[2].position.x = bx + hw;
+    verts[2].position.y = by + th;
+    verts[3].position.x = bx + tw;
+    verts[3].position.y = by + hh;
 
     verts[0].tex_coord.x = verts[0].tex_coord.y = 0.0f;
     verts[1].tex_coord.x = verts[1].tex_coord.y = 0.0f;
@@ -94,25 +102,20 @@ static void draw_diamond(SDL_Renderer *renderer,
 }
 
 static void draw_diamond_outline(SDL_Renderer *renderer,
-                                 int bx, int by,
+                                 float bx, float by, float zoom,
                                  unsigned char r, unsigned char g,
                                  unsigned char b, unsigned char a)
 {
-    int hw = TILE_W / 2;
-    int hh = TILE_H / 2;
+    /* CHANGED: zoomed dimensions to match draw_diamond */
+    float tw = (float)TILE_W * zoom;
+    float th = (float)TILE_H * zoom;
+    float hw = tw / 2.0f;
+    float hh = th / 2.0f;
     SDL_SetRenderDrawColor(renderer, r, g, b, a);
-    SDL_RenderLine(renderer,
-        (float)(bx+hw),    (float)(by),
-        (float)(bx),       (float)(by+hh));
-    SDL_RenderLine(renderer,
-        (float)(bx),       (float)(by+hh),
-        (float)(bx+hw),    (float)(by+TILE_H));
-    SDL_RenderLine(renderer,
-        (float)(bx+hw),    (float)(by+TILE_H),
-        (float)(bx+TILE_W),(float)(by+hh));
-    SDL_RenderLine(renderer,
-        (float)(bx+TILE_W),(float)(by+hh),
-        (float)(bx+hw),    (float)(by));
+    SDL_RenderLine(renderer, bx+hw, by,    bx,    by+hh);
+    SDL_RenderLine(renderer, bx,    by+hh, bx+hw, by+th);
+    SDL_RenderLine(renderer, bx+hw, by+th, bx+tw, by+hh);
+    SDL_RenderLine(renderer, bx+tw, by+hh, bx+hw, by);
 }
 
 /* =========================================================
@@ -136,31 +139,22 @@ void render_clear(SDL_Renderer *renderer)
 void render_map(SDL_Renderer *renderer,
                 const Map *map, const Camera *cam)
 {
-    int r, c, sx, sy;
+    /* CHANGED: float sx/sy to match iso_to_screen float output */
+    int r, c;
+    float sx, sy;
+    float tw = (float)TILE_W * cam->zoom;
+    float th = (float)TILE_H * cam->zoom;
 
     for (r = 0; r < map->rows; r++) {
         for (c = 0; c < map->cols; c++) {
             const Tile *t = &map->tiles[r][c];
             iso_to_screen(r, c, cam, &sx, &sy);
-
-            if (sx + TILE_W < 0 || sx > SCREEN_W ||
-                sy + TILE_H < 0 || sy > SCREEN_H)
+            if (sx + tw < 0 || sx > SCREEN_W ||
+                sy + th < 0 || sy > SCREEN_H)
                 continue;
-
-            if (g_sprites.ready) {
-                /* CHANGED Phase 6: sprite path */
-                SDL_Texture *tex = g_sprites.terrain[t->type];
-                SDL_FRect dst = {
-                    (float)sx, (float)sy,
-                    (float)TILE_W, (float)TILE_H
-                };
-                SDL_RenderTexture(renderer, tex, NULL, &dst);
-            } else {
-                /* Fallback: coloured diamond */
-                draw_diamond(renderer, sx, sy,
-                             TILE_COLOURS[t->type],
-                             TILE_DARK[t->type]);
-            }
+            draw_diamond(renderer, sx, sy, cam->zoom,
+                         TILE_COLOURS[t->type],
+                         TILE_DARK[t->type]);
         }
     }
 }
@@ -170,10 +164,11 @@ void render_hovered_tile(SDL_Renderer *renderer,
                          const Camera *cam,
                          int row, int col)
 {
-    int sx, sy;
+    float sx, sy;
     if (row < 0 || col < 0) return;
     iso_to_screen(row, col, cam, &sx, &sy);
-    draw_diamond_outline(renderer, sx, sy, 255, 230, 50, 255);
+    /* CHANGED: pass zoom to outline */
+    draw_diamond_outline(renderer, sx, sy, cam->zoom, 255, 230, 50, 255);
 }
 
 /* ---- render_buildings ----------------------------------
@@ -191,7 +186,9 @@ void render_buildings(SDL_Renderer *renderer,
                       const Building buildings[], int count,
                       const Camera *cam)
 {
-    int i, r, c, sx, sy;
+    /* CHANGED: float sx/sy for zoomed rendering */
+    int i, r, c;
+    float sx, sy;
 
     for (i = 0; i < count; i++) {
         const Building    *b   = &buildings[i];
@@ -199,54 +196,7 @@ void render_buildings(SDL_Renderer *renderer,
 
         if (!b->active) continue;
 
-        /* For multi-tile buildings, use top-left tile as anchor */
-        iso_to_screen(b->row, b->col, cam, &sx, &sy);
-
-        if (g_sprites.ready) {
-            /* CHANGED Phase 6: sprite path.
-             * Building sprite height = COMP_H = 192 = TILE_H * 1.5
-             * Position it so the base sits on the tile surface. */
-            SDL_Texture *tex = g_sprites.building[b->type];
-            /* Building sprite is COMP_W x COMP_H (256x320).
-             * Layout inside the sprite (from top):
-             *   0..roof_h        = roof  (≈163px)
-             *   roof_h-RIDGE..   = walls (WALL_H=192px)
-             *   wall_y+WALL_H    = base of building
-             *
-             * We need the base of the building to align with
-             * the tile diamond top (sy).
-             * roof_h ≈ 163, WALL_RIDGE_Y = 63 → wall_y = 100
-             * total sprite height = COMP_H = 320
-             * base_in_sprite = wall_y + WALL_H = 100 + 192 = 292
-             * So: sprite_y = sy - base_in_sprite
-             *              = sy - 292
-             *
-             * For multi-tile footprints: the top-left tile anchor
-             * is already at the correct isometric position. */
-            int bld_w = TILE_W;     /* always render at one tile wide */
-            int bld_h = 320;        /* COMP_H */
-            
-            /* CHANGED: building base anchors to the BOTTOM of the
-             * tile diamond (sy + TILE_H), not the top (sy).
-             * iso_to_screen() returns the bounding-box top-left,
-             * so the diamond bottom is at sy + TILE_H.
-             * base_in_sprite = where the wall base sits in the
-             * 320px tall composite = wall_y(100) + WALL_H(192) = 292.
-             * sprite_top = (sy + TILE_H) - base_in_sprite
-             *            = sy + 128 - 292  →  y_off = 128 - 292 = -164 */
-
-            int x_off = 0;
-            int y_off = TILE_H - 292;  /* = -164 */
-
-            SDL_FRect dst = {
-                (float)(sx + x_off),
-                (float)(sy + y_off),
-                (float)bld_w,
-                (float)bld_h
-            };
-            SDL_RenderTexture(renderer, tex, NULL, &dst);
-        } else {
-            /* Fallback: coloured diamonds per footprint tile */
+        {
             SDL_Color top, bot;
             top.r = def->col_r; top.g = def->col_g;
             top.b = def->col_b; top.a = 255;
@@ -257,8 +207,8 @@ void render_buildings(SDL_Renderer *renderer,
             for (r = b->row; r < b->row + def->tile_h; r++) {
                 for (c = b->col; c < b->col + def->tile_w; c++) {
                     iso_to_screen(r, c, cam, &sx, &sy);
-                    draw_diamond(renderer, sx, sy, top, bot);
-                    draw_diamond_outline(renderer, sx, sy,
+                    draw_diamond(renderer, sx, sy, cam->zoom, top, bot);
+                    draw_diamond_outline(renderer, sx, sy, cam->zoom,
                                          255, 255, 255, 60);
                 }
             }
@@ -273,8 +223,10 @@ void render_ghost(SDL_Renderer *renderer,
                   int row, int col,
                   int valid)
 {
+    /* CHANGED: float sx/sy, pass zoom */
     const BuildingDef *def = &BUILDING_DEFS[type];
-    int r, c, sx, sy;
+    int r, c;
+    float sx, sy;
     SDL_Color top, bot;
 
     if (row < 0 || col < 0) return;
@@ -291,7 +243,7 @@ void render_ghost(SDL_Renderer *renderer,
     for (r = row; r < row + def->tile_h; r++) {
         for (c = col; c < col + def->tile_w; c++) {
             iso_to_screen(r, c, cam, &sx, &sy);
-            draw_diamond(renderer, sx, sy, top, bot);
+            draw_diamond(renderer, sx, sy, cam->zoom, top, bot);
         }
     }
     SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);

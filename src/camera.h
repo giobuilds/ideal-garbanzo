@@ -14,9 +14,15 @@
 
 #define CAMERA_PAN_SPEED 400.0f  /* pixels moved per second when key held */
 
+#define ZOOM_DEFAULT  1.0f   /* starting zoom level                    */
+#define ZOOM_MIN      0.8f   /* CHANGED: max 20%% zoom out              */
+#define ZOOM_MAX      1.3f   /* CHANGED: max 30%% zoom in               */
+#define ZOOM_STEP     0.05f  /* CHANGED: finer step (5%% per notch)     */
+
 typedef struct {
     float offset_x;   /* horizontal scroll in pixels */
     float offset_y;   /* vertical  scroll in pixels  */
+    float zoom;       /* scale factor: 1.0 = normal, 2.0 = 2x in  */
 } Camera;
 
 /* Reset camera to a sensible starting position that centres the

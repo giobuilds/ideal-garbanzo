@@ -4,6 +4,8 @@ cmake --build build -j$(nproc)
 ./build/anno_clone
 
 # Project Architecture (High Level)
+
+```
 anno1800-clone/
 ├── src/
 │   ├── main.c
@@ -20,9 +22,11 @@ anno1800-clone/
 │   └── sprites/
 ├── CMakeLists.txt
 └── BUILD.md
+```
 
 # Deliverables
 
+```
 *File*            *Responsibility*
 _main.c_          SDL3 callbacks only (AppInit, AppEvent, AppIterate, AppQuit). Creates window, wires all subsystems together, owns the render order. No game logic.
 _map.h/c_         64×64 isometric tile grid. TileType enum, Tile struct (type, elevation, buildable, fertility, movement_cost). Procedural island generator using two-octave value noise + radial island mask + LCG RNG.
@@ -35,7 +39,7 @@ _resource.h/c_    ResourceType enum (WOOD, FISH, GRAIN, GOLD). Stockpile struct 
 _ui.h/c_          HUD bar (building slots with colour swatch + footprint dot grid, cog button with pixel-art icon). Menu overlay (dimmed background, panel, New Game/Save/Quit buttons). All hit-testing functions. Tooltip stub ready for SDL_ttf.
 _CMakeLists.txt_  CMake build config. C99, -Wall -Wextra -Wpedantic -Wshadow -Wconversion. Links SDL3::SDL3 and m (libm for floorf).
 _BUILD.md_        Build and run instructions for Fedora. SDL3 install, cmake commands, controls reference.
-
+```
 
 # Phase 2: procedural island generator with value noise
 
