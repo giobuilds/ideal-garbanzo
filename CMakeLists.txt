@@ -26,6 +26,7 @@ set(SOURCES
     src/connectivity.c
     src/trade_ui.c
     src/agent.c
+    src/build_confirm_ui.c
 )
 
 add_executable(anno_clone ${SOURCES})

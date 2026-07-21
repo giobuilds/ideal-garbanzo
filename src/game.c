@@ -14,36 +14,6 @@
 
 static void game_recompute_storage_capacity(GameState *gs);
 
-/* Phase 5: how many starter Houses game_reset_world() auto-places,
- * each pre-filled to HOUSE_CAPACITY residents — 10 * 10 = 100,
- * satisfying "start with 100 population." Deliberately placed via
- * building_place() directly (bypassing game_place_building()'s cost
- * deduction — these are given, not purchased) and just as subject to
- * Phase 3's connectivity gate as any player-built House: with no
- * Warehouse/roads yet at turn 0, they'll start losing residents every
- * NEEDS_INTERVAL until connected — a deliberate early-game pressure,
- * not an oversight. */
-#define STARTER_HOUSE_COUNT 10
-
-static void place_starter_houses(GameState *gs)
-{
-    int placed = 0, r, c;
-
-    for (r = 0; r < MAP_ROWS && placed < STARTER_HOUSE_COUNT; r++) {
-        for (c = 0; c < MAP_COLS && placed < STARTER_HOUSE_COUNT; c++) {
-            int idx;
-            if (!building_can_place(&gs->map, BUILDING_HOUSE, r, c, NULL, 0))
-                continue;
-            idx = building_place(gs->buildings, &gs->building_count,
-                                 &gs->map, BUILDING_HOUSE, r, c);
-            if (idx < 0) continue;
-            pop_init(&gs->pop_data[idx]);
-            gs->pop_data[idx].residents = HOUSE_CAPACITY;
-            placed++;
-        }
-    }
-}
-
 /* ---- game_reset_world -----------------------------------
  * Regenerates the map and clears all placed buildings, the
  * population, and the stockpile. Shared by game_init() (on a
@@ -72,11 +42,20 @@ static void game_reset_world(GameState *gs, uint32_t seed)
     gs->menu_open           = 0;
     gs->trade_open          = 0;
     gs->trade_building_idx  = -1;
+    gs->build_confirm_open    = 0;
+    gs->build_confirm_row     = -1;
+    gs->build_confirm_col     = -1;
+    gs->build_confirm_payment = 0;
+    gs->drag_last_row         = -1;
+    gs->drag_last_col         = -1;
+    gs->demolish_mode         = 0;
 
     stockpile_init(&gs->stockpile);
     stockpile_add(&gs->stockpile, RES_GOLD, STARTING_GOLD);
 
-    place_starter_houses(gs);
+    /* No starter houses: the player places their own first House and
+     * grows population from there (agents_sync below just confirms
+     * the world starts with zero of both). */
     agents_sync(gs->agents, &gs->agent_count, gs->buildings, gs->pop_data,
                gs->building_count);
 }
@@ -324,12 +303,36 @@ void game_update(GameState *gs, SDL_Renderer *renderer)
         gs->hovered_col = -1;
     }
 
+    /* Road drag-placement: while the button is held and Road is
+     * selected, place at each newly-hovered tile as the cursor
+     * crosses it (no confirm popup — see game_try_place_road()'s doc
+     * comment on why Road is exempt). Reset drag_last_row/col to -1
+     * whenever the button isn't held so the next drag's first tile
+     * is never skipped as "unchanged". */
+    if (!gs->input.left_down) {
+        gs->drag_last_row = -1;
+        gs->drag_last_col = -1;
+    } else if (gs->selected_building == BUILDING_ROAD &&
+              !gs->build_confirm_open && !gs->menu_open && !gs->trade_open &&
+              gs->hovered_row >= 0 &&
+              (gs->hovered_row != gs->drag_last_row ||
+               gs->hovered_col != gs->drag_last_col)) {
+        game_try_place_road(gs, gs->hovered_row, gs->hovered_col);
+        gs->drag_last_row = gs->hovered_row;
+        gs->drag_last_col = gs->hovered_col;
+    }
+
+    /* placement_valid no longer factors in affordability — that's
+     * now a per-payment-method question the build-confirmation popup
+     * resolves (see game_place_building_confirmed()). The ghost tint
+     * reflects only "does this tile structurally work": the player
+     * can always open the popup and see both payment options even
+     * sitting at 0 Gold. */
     gs->placement_valid = 0;
     if (gs->selected_building != BUILDING_NONE && gs->hovered_row >= 0)
-        gs->placement_valid =
-            building_can_place(&gs->map, gs->selected_building,
-                gs->hovered_row, gs->hovered_col, NULL, 0) &&
-            building_can_afford(&gs->stockpile, gs->selected_building);
+        gs->placement_valid = building_can_place(&gs->map,
+            gs->selected_building, gs->hovered_row, gs->hovered_col,
+            NULL, 0);
 
     /* Phase 3: recompute road-network reachability before anything
      * this frame reads Building.connected. */
@@ -363,38 +366,89 @@ void game_update(GameState *gs, SDL_Renderer *renderer)
                  gs->building_count, dt);
 }
 
-/* ---- game_place_building -------------------------------
- * Phase 5: when a House is placed, initialise its PopData.
- * -------------------------------------------------------- */
-void game_place_building(GameState *gs)
+/* ---- commit_placement -----------------------------------
+ * Shared by game_try_place_road() and game_place_building_confirmed():
+ * the actual building_place() call plus its post-placement side
+ * effects (House PopData, Warehouse storage capacity). Callers are
+ * responsible for their own affordability check and payment
+ * deduction beforehand — this only ever runs once placement is
+ * already decided. Returns the new building's index, or -1 on
+ * failure (full array or invalid tile — the latter shouldn't happen
+ * given callers already check building_can_place()). */
+static int commit_placement(GameState *gs, BuildingType type, int row, int col)
 {
-    int idx, i;
-    const BuildingDef *def;
-
-    if (gs->selected_building == BUILDING_NONE) return;
-    if (gs->hovered_row < 0) return;
-    if (!building_can_afford(&gs->stockpile, gs->selected_building)) return;
-
-    idx = building_place(gs->buildings, &gs->building_count,
-                         &gs->map, gs->selected_building,
-                         gs->hovered_row, gs->hovered_col);
-
-    if (idx < 0) return;
-
-    def = &BUILDING_DEFS[gs->selected_building];
-    for (i = 0; i < RES_COUNT; i++)
-        if (def->cost[i] > 0)
-            stockpile_add(&gs->stockpile, (ResourceType)i, -def->cost[i]);
+    int idx = building_place(gs->buildings, &gs->building_count,
+                             &gs->map, type, row, col);
+    if (idx < 0) return -1;
 
     /* Phase 5: if a house was just placed, activate its PopData */
-    if (gs->selected_building == BUILDING_HOUSE)
+    if (type == BUILDING_HOUSE)
         pop_init(&gs->pop_data[idx]);
 
     /* Warehouses raise how much of each non-gold resource the
      * stockpile can hold; recompute after every placement so a
      * newly built Warehouse takes effect immediately. */
-    if (gs->selected_building == BUILDING_WAREHOUSE)
+    if (type == BUILDING_WAREHOUSE)
         game_recompute_storage_capacity(gs);
+
+    return idx;
+}
+
+/* ---- game_try_place_road ----------------------------------
+ * Roads are exempt from the build-confirmation popup: they're also
+ * placeable by dragging (see game_update()'s per-frame drag check),
+ * and a per-tile confirmation dialog would make that gesture
+ * unusable. A single non-dragged click on Road goes through this
+ * same function for consistency — one tile placed the same way
+ * whether it came from a click or a drag. Roads are Gold-only, so
+ * there's no resources-vs-gold choice to offer anyway. */
+int game_try_place_road(GameState *gs, int row, int col)
+{
+    const BuildingDef *def = &BUILDING_DEFS[BUILDING_ROAD];
+
+    if (!building_can_place(&gs->map, BUILDING_ROAD, row, col, NULL, 0))
+        return 0;
+    if (!building_can_afford(&gs->stockpile, BUILDING_ROAD))
+        return 0;
+
+    if (commit_placement(gs, BUILDING_ROAD, row, col) < 0)
+        return 0;
+
+    stockpile_add(&gs->stockpile, RES_GOLD, -def->cost[RES_GOLD]);
+    return 1;
+}
+
+/* ---- game_place_building_confirmed ------------------------- */
+void game_place_building_confirmed(GameState *gs, int pay_with_gold)
+{
+    BuildingType        type = gs->selected_building;
+    const BuildingDef  *def;
+    int                 i;
+
+    if (type == BUILDING_NONE) return;
+    if (gs->build_confirm_row < 0) return;
+    def = &BUILDING_DEFS[type];
+
+    if (pay_with_gold) {
+        int gold_cost = building_gold_equivalent_cost(type);
+        if (gs->stockpile.amount[RES_GOLD] < gold_cost) return;
+
+        if (commit_placement(gs, type, gs->build_confirm_row,
+                             gs->build_confirm_col) < 0)
+            return;
+
+        stockpile_add(&gs->stockpile, RES_GOLD, -gold_cost);
+    } else {
+        if (!building_can_afford(&gs->stockpile, type)) return;
+
+        if (commit_placement(gs, type, gs->build_confirm_row,
+                             gs->build_confirm_col) < 0)
+            return;
+
+        for (i = 0; i < RES_COUNT; i++)
+            if (def->cost[i] > 0)
+                stockpile_add(&gs->stockpile, (ResourceType)i, -def->cost[i]);
+    }
 }
 
 /* ---- game_find_building_at ------------------------------- */
@@ -428,6 +482,54 @@ void game_sell_resource(GameState *gs, ResourceType res, int qty)
 
     stockpile_add(&gs->stockpile, res, -qty);
     stockpile_add(&gs->stockpile, RES_GOLD, qty * SELL_PRICE[res]);
+}
+
+/* ---- game_demolish_building --------------------------------- */
+void game_demolish_building(GameState *gs, int idx)
+{
+    BuildingType type;
+    int i;
+
+    if (idx < 0 || idx >= gs->building_count) return;
+    if (!gs->buildings[idx].active) return;
+
+    type = gs->buildings[idx].type;
+
+    gs->buildings[idx].active       = 0;
+    gs->buildings[idx].connected    = 0;
+    gs->buildings[idx].worker_count = 0;
+
+    if (gs->pop_data[idx].active) {
+        gs->pop_data[idx].active    = 0;
+        gs->pop_data[idx].residents = 0;
+    }
+
+    /* Clean up any agents referencing this building — otherwise a
+     * demolished workplace leaves an agent stuck "employed" at a
+     * dead job forever (agent_assign_jobs only reassigns agents with
+     * work_idx == -1), and a demolished home leaves one with nowhere
+     * to be. */
+    for (i = 0; i < gs->agent_count; i++) {
+        Agent *a = &gs->agents[i];
+        if (!a->active) continue;
+
+        if (a->home_idx == idx) {
+            a->active = 0;
+        } else if (a->work_idx == idx) {
+            a->work_idx    = -1;
+            a->state       = AGENT_IDLE_HOME;
+            a->state_timer = 0.0f;
+            a->path_len    = 0;
+            a->path_pos    = 0;
+            /* Snap back to standing at home rather than leaving the
+             * agent's dot stranded wherever it was mid-commute. */
+            a->row = (float)gs->buildings[a->home_idx].row;
+            a->col = (float)gs->buildings[a->home_idx].col;
+        }
+    }
+
+    if (type == BUILDING_WAREHOUSE)
+        game_recompute_storage_capacity(gs);
 }
 
 /* ---- game_recompute_storage_capacity ---------------------

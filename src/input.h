@@ -16,6 +16,15 @@ typedef struct {
 
     int left_click;
     int right_click;
+
+    /* Level-triggered: 1 while the left button is physically held,
+     * 0 otherwise. Unlike left_click (an edge fired once on release,
+     * cleared every frame by input_clear_clicks()), this persists
+     * across frames for as long as the button is actually down — it's
+     * what drives road drag-placement (see game_update()'s per-frame
+     * drag check in game.c). Set by SDL_EVENT_MOUSE_BUTTON_DOWN/UP,
+     * NOT reset by input_clear_clicks(). */
+    int left_down;
 } InputState;
 
 void           input_init(InputState *input);

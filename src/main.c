@@ -10,6 +10,7 @@
 #include "render.h"
 #include "ui.h"
 #include "trade_ui.h"  /* Phase 4 */
+#include "build_confirm_ui.h" /* fix pass: gold/resource payment choice */
 #include "fonts.h"    /* Phase 5 */
 
 typedef struct { SDL_Window *w; SDL_Renderer *r; GameState *g; } App;
@@ -78,9 +79,35 @@ SDL_AppResult SDL_AppIterate(void *appstate)
     /* --- Handle clicks ---------------------------------- */
     if (gs->input.left_click) {
 
+        /* Fix pass: if the build-confirmation popup is open, only its
+         * buttons respond (highest priority — mirrors trade_open/
+         * menu_open below). */
+        if (gs->build_confirm_open) {
+            BuildConfirmHit hit = build_confirm_ui_hit_test(SCREEN_W, SCREEN_H,
+                                                            gs->input.logical_x,
+                                                            gs->input.logical_y);
+            switch (hit) {
+            case BC_HIT_PAY_RESOURCES:
+                gs->build_confirm_payment = 0;
+                break;
+            case BC_HIT_PAY_GOLD:
+                gs->build_confirm_payment = 1;
+                break;
+            case BC_HIT_OK:
+                game_place_building_confirmed(gs, gs->build_confirm_payment);
+                gs->build_confirm_open = 0;
+                break;
+            case BC_HIT_CANCEL:
+            case BC_HIT_NONE:
+                /* Cancel, or a click outside the panel: close with no
+                 * placement and no payment deducted. */
+                gs->build_confirm_open = 0;
+                break;
+            }
+
         /* Phase 4: if the trade screen is open, only its buttons
          * respond (mirrors the menu_open branch below). */
-        if (gs->trade_open) {
+        } else if (gs->trade_open) {
             ResourceType res;
             int          qty;
             TradeHit     hit = trade_ui_hit_test(SCREEN_W, SCREEN_H,
@@ -127,12 +154,20 @@ SDL_AppResult SDL_AppIterate(void *appstate)
             }
 
         } else {
-            /* CHANGED: check cog button first, then HUD slots, then map */
+            /* CHANGED: check cog button first, then demolish button,
+             * then HUD slots, then map */
             if (ui_cog_hit_test(SCREEN_W, SCREEN_H,
                                 gs->input.logical_x,
                                 gs->input.logical_y)) {
                 gs->menu_open = 1;
                 gs->selected_building = BUILDING_NONE; /* deselect on menu open */
+                gs->demolish_mode = 0;
+
+            } else if (ui_demolish_hit_test(SCREEN_W, SCREEN_H,
+                                            gs->input.logical_x,
+                                            gs->input.logical_y)) {
+                gs->demolish_mode = !gs->demolish_mode;
+                gs->selected_building = BUILDING_NONE;
 
             } else {
                 BuildingType hud_hit = ui_hit_test(SCREEN_W, SCREEN_H,
@@ -142,6 +177,14 @@ SDL_AppResult SDL_AppIterate(void *appstate)
                     gs->selected_building =
                         (gs->selected_building == hud_hit)
                         ? BUILDING_NONE : hud_hit;
+                    gs->demolish_mode = 0;
+                } else if (gs->demolish_mode) {
+                    /* Fix pass: clicking a building while the demolish
+                     * tool is active removes it (roads included). */
+                    int found = game_find_building_at(gs, gs->hovered_row,
+                                                      gs->hovered_col);
+                    if (found >= 0)
+                        game_demolish_building(gs, found);
                 } else if (gs->selected_building == BUILDING_NONE) {
                     /* Phase 4: nothing selected — clicking a placed,
                      * connected Marketplace opens the trade screen
@@ -154,21 +197,40 @@ SDL_AppResult SDL_AppIterate(void *appstate)
                         gs->trade_open        = 1;
                         gs->trade_building_idx = found;
                     }
-                } else {
-                    game_place_building(gs);
+                } else if (gs->selected_building == BUILDING_ROAD) {
+                    /* Roads are exempt from the confirm popup — also
+                     * placeable by dragging (game_update()'s per-frame
+                     * drag check), and a per-tile confirmation would
+                     * make that gesture unusable. A single click
+                     * behaves the same way a 1-tile drag does. */
+                    game_try_place_road(gs, gs->hovered_row, gs->hovered_col);
+                } else if (gs->selected_building != BUILDING_NONE &&
+                          gs->hovered_row >= 0 &&
+                          building_can_place(&gs->map, gs->selected_building,
+                                            gs->hovered_row, gs->hovered_col,
+                                            NULL, 0)) {
+                    gs->build_confirm_open    = 1;
+                    gs->build_confirm_row     = gs->hovered_row;
+                    gs->build_confirm_col     = gs->hovered_col;
+                    gs->build_confirm_payment = 0;
                 }
             }
         }
     }
 
-    /* Right click: close trade screen or menu if open, else deselect */
+    /* Right click: close confirm popup, trade screen, or menu if
+     * open (highest priority first), else deselect */
     if (gs->input.right_click) {
-        if (gs->trade_open)
+        if (gs->build_confirm_open)
+            gs->build_confirm_open = 0;
+        else if (gs->trade_open)
             gs->trade_open = 0;       /* Phase 4 */
         else if (gs->menu_open)
             gs->menu_open = 0;        /* CHANGED: right click closes menu */
-        else
+        else {
             gs->selected_building = BUILDING_NONE;
+            gs->demolish_mode     = 0;
+        }
     }
 
     input_clear_clicks(&gs->input);
@@ -204,7 +266,8 @@ SDL_AppResult SDL_AppIterate(void *appstate)
             gs->selected_building,
             gs->input.logical_x,
             gs->input.logical_y,
-            gs->menu_open);
+            gs->menu_open,
+            gs->demolish_mode);
 
     /* CHANGED: draw menu overlay on top of everything when open */
     if (gs->menu_open)
@@ -216,6 +279,13 @@ SDL_AppResult SDL_AppIterate(void *appstate)
     if (gs->trade_open)
         trade_ui_draw(app->r, SCREEN_W, SCREEN_H, &gs->stockpile,
                      gs->input.logical_x, gs->input.logical_y);
+
+    /* Fix pass: draw the build-confirmation popup on top when open */
+    if (gs->build_confirm_open)
+        build_confirm_ui_draw(app->r, SCREEN_W, SCREEN_H,
+                              gs->selected_building, &gs->stockpile,
+                              gs->build_confirm_payment,
+                              gs->input.logical_x, gs->input.logical_y);
 
     SDL_RenderPresent(app->r);
     return SDL_APP_CONTINUE;

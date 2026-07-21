@@ -16,6 +16,13 @@ const int SELL_PRICE[RES_COUNT] = {
     /* RES_GOLD left at 0 — unused, can't sell gold for gold */
 };
 
+const int BUY_PRICE[RES_COUNT] = {
+    [RES_WOOD]  = 5,
+    [RES_FISH]  = 6,
+    [RES_GRAIN] = 5,
+    /* RES_GOLD left at 0 — unused */
+};
+
 void stockpile_init(Stockpile *s)
 {
     int i;

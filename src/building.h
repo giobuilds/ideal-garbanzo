@@ -143,6 +143,13 @@ int building_can_place(const Map *map,
  * reasons a caller can tell apart. */
 int building_can_afford(const Stockpile *s, BuildingType type);
 
+/* Total Gold cost to place `type` paying entirely in Gold: the
+ * building's own Gold cost plus every other resource's cost[] amount
+ * converted at BUY_PRICE (resource.h). For a Gold-only building type
+ * (nothing to convert) this equals its existing Gold cost exactly.
+ * Used by the build-confirmation popup's "pay Gold" option. */
+int building_gold_equivalent_cost(BuildingType type);
+
 /* Place a building into the buildings array.
  * Returns the index of the new building, or -1 if the array
  * is full or placement is invalid. */

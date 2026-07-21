@@ -79,11 +79,13 @@ const BuildingDef BUILDING_DEFS[BUILDING_TYPE_COUNT] = {
     },
     /* Phase 2: Road — no production; PLACE_ANY_LAND is sufficient
      * to keep it off water/forest, since building_can_place already
-     * requires tile->buildable, which those tile types never have. */
+     * requires tile->buildable, which those tile types never have.
+     * Free: a real road network needs many tiles, and charging per
+     * tile made drag-placing one needlessly punishing. */
     {
         "Road",         1, 1, PLACE_ANY_LAND,      110, 105, 100,
         RES_COUNT,      0,   RES_COUNT,     0,   0.0f,
-        { [RES_GOLD] = 5 }
+        { 0 }
     },
     /* Phase 4: Marketplace — no passive production; it's a pure
      * gateway building. Clicking a placed, road-connected one opens
@@ -212,9 +214,7 @@ int building_place(Building buildings[], int *count,
                    const Map *map,
                    BuildingType type, int row, int col)
 {
-    int i;
-
-    if (*count >= MAX_BUILDINGS) return -1;
+    int i, slot;
 
     /* Check for tile overlap with existing buildings */
     {
@@ -229,16 +229,29 @@ int building_place(Building buildings[], int *count,
     if (!building_can_place(map, type, row, col, NULL, 0))
         return -1;
 
-    /* Find first inactive slot (or append) */
-    i = *count;
-    buildings[i].type   = type;
-    buildings[i].row    = row;
-    buildings[i].col    = col;
-    buildings[i].active = 1;
-    buildings[i].timer  = 0.0f;   /* CHANGED Phase 4: initialise timer */
-    (*count)++;
+    /* Reuse a demolished building's slot before appending — without
+     * this, repeated build/destroy cycles on the same spot would
+     * burn through MAX_BUILDINGS even though the live count stays
+     * low. (The cap only applies when no free slot exists, so
+     * reusing one works even with *count already at MAX_BUILDINGS.) */
+    slot = -1;
+    for (i = 0; i < *count; i++) {
+        if (!buildings[i].active) { slot = i; break; }
+    }
+    if (slot < 0) {
+        if (*count >= MAX_BUILDINGS) return -1;
+        slot = (*count)++;
+    }
 
-    return i;
+    buildings[slot].type         = type;
+    buildings[slot].row          = row;
+    buildings[slot].col          = col;
+    buildings[slot].active       = 1;
+    buildings[slot].timer        = 0.0f;   /* CHANGED Phase 4: initialise timer */
+    buildings[slot].connected    = 0;
+    buildings[slot].worker_count = 0;
+
+    return slot;
 }
 
 /* =========================================================
@@ -254,4 +267,19 @@ int building_can_afford(const Stockpile *s, BuildingType type)
             return 0;
 
     return 1;
+}
+
+/* =========================================================
+ * building_gold_equivalent_cost
+ * ========================================================= */
+int building_gold_equivalent_cost(BuildingType type)
+{
+    const BuildingDef *def = &BUILDING_DEFS[type];
+    int i, total = def->cost[RES_GOLD];
+
+    for (i = 0; i < RES_COUNT; i++)
+        if (i != RES_GOLD)
+            total += def->cost[i] * BUY_PRICE[i];
+
+    return total;
 }
