@@ -10,32 +10,44 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* ---- game_init ----------------------------------------- */
-GameState *game_init(void)
+/* ---- game_reset_world -----------------------------------
+ * Regenerates the map and clears all placed buildings, the
+ * population, and the stockpile. Shared by game_init() (on a
+ * freshly malloc'd GameState) and game_new() (on a live one,
+ * for the "New Game" menu button) so the two can't drift apart.
+ * Does not touch InputState or frame-timing fields — those
+ * belong to the input device / clock, not the game world. */
+static void game_reset_world(GameState *gs, uint32_t seed)
 {
-    GameState *gs = (GameState *)malloc(sizeof(GameState));
-    if (!gs) return NULL;
-
-    uint32_t seed = (uint32_t)SDL_GetTicksNS();
     SDL_Log("Map seed: %u", seed);
     map_init(&gs->map, seed);
 
     camera_init(&gs->camera, SCREEN_W, SCREEN_H, MAP_COLS, MAP_ROWS);
-    input_init(&gs->input);
 
     gs->hovered_row       = -1;
     gs->hovered_col       = -1;
-    gs->last_tick         = SDL_GetTicksNS();
-    gs->delta_time        = 0.0f;
 
     memset(gs->buildings, 0, sizeof(gs->buildings));
-    memset(gs->pop_data,  0, sizeof(gs->pop_data));  /* Phase 5 */
+    memset(gs->pop_data,  0, sizeof(gs->pop_data));
     gs->building_count    = 0;
     gs->selected_building = BUILDING_NONE;
     gs->placement_valid   = 0;
     gs->menu_open         = 0;
 
     stockpile_init(&gs->stockpile);
+}
+
+/* ---- game_init ----------------------------------------- */
+GameState *game_init(void)
+{
+    GameState *gs = (GameState *)malloc(sizeof(GameState));
+    if (!gs) return NULL;
+
+    input_init(&gs->input);
+    gs->last_tick  = SDL_GetTicksNS();
+    gs->delta_time = 0.0f;
+
+    game_reset_world(gs, (uint32_t)SDL_GetTicksNS());
 
     return gs;
 }
@@ -44,6 +56,67 @@ GameState *game_init(void)
 void game_free(GameState *gs)
 {
     free(gs);
+}
+
+/* ---- game_new -------------------------------------------- */
+void game_new(GameState *gs)
+{
+    game_reset_world(gs, (uint32_t)SDL_GetTicksNS());
+}
+
+/* ---- game_save --------------------------------------------
+ * Flat binary format: header, then the live building_count
+ * entries of buildings[] and pop_data[] (they're parallel
+ * arrays, see game.h), then the stockpile. The 64x64 tile grid
+ * itself is never written — map_init(seed) regenerates it
+ * deterministically, so the seed alone is enough to restore it.
+ * -------------------------------------------------------- */
+typedef struct {
+    uint32_t magic;
+    uint32_t version;
+    uint32_t seed;
+    int32_t  building_count;
+    float    cam_offset_x;
+    float    cam_offset_y;
+    float    cam_zoom;
+} SaveHeader;
+
+#define SAVE_MAGIC   0x414E4E4Fu  /* "ANNO" */
+#define SAVE_VERSION 1u
+
+int game_save(const GameState *gs, const char *path)
+{
+    SDL_IOStream *io = SDL_IOFromFile(path, "wb");
+    SaveHeader    hdr;
+    size_t        buildings_bytes = sizeof(Building) * (size_t)gs->building_count;
+    size_t        pop_bytes       = sizeof(PopData)  * (size_t)gs->building_count;
+
+    if (!io) {
+        SDL_Log("game_save: could not open %s: %s", path, SDL_GetError());
+        return 0;
+    }
+
+    hdr.magic          = SAVE_MAGIC;
+    hdr.version        = SAVE_VERSION;
+    hdr.seed           = gs->map.seed;
+    hdr.building_count = gs->building_count;
+    hdr.cam_offset_x   = gs->camera.offset_x;
+    hdr.cam_offset_y   = gs->camera.offset_y;
+    hdr.cam_zoom       = gs->camera.zoom;
+
+    if (SDL_WriteIO(io, &hdr, sizeof(hdr)) != sizeof(hdr) ||
+        SDL_WriteIO(io, gs->buildings, buildings_bytes) != buildings_bytes ||
+        SDL_WriteIO(io, gs->pop_data,  pop_bytes)       != pop_bytes ||
+        SDL_WriteIO(io, &gs->stockpile, sizeof(Stockpile)) != sizeof(Stockpile)) {
+        SDL_Log("game_save: write to %s failed: %s", path, SDL_GetError());
+        SDL_CloseIO(io);
+        return 0;
+    }
+
+    SDL_CloseIO(io);
+    SDL_Log("Game saved to %s (seed=%u, %d buildings)",
+            path, hdr.seed, gs->building_count);
+    return 1;
 }
 
 /* ---- game_tick_buildings (unchanged from Phase 4) ------ */

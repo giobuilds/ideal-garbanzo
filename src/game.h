@@ -73,6 +73,19 @@ GameState *game_init(void);
 /* Free a GameState allocated by game_init(). */
 void game_free(GameState *gs);
 
+/* Reset gs to a freshly generated world: new map seed, buildings,
+ * population and stockpile all cleared. Input/timing state is left
+ * untouched. Used by the "New Game" menu button. */
+void game_new(GameState *gs);
+
+/* Serialize gs (map seed, buildings, population, stockpile, camera)
+ * to `path`. Returns 1 on success, 0 on failure (see SDL_GetError()).
+ * The map itself is not written — map_init(seed) regenerates it
+ * deterministically. Used by the "Save" menu button. */
+int  game_save(const GameState *gs, const char *path);
+
+#define SAVE_FILE_PATH "annoclone_save.dat"
+
 /* Called once per frame.  Moves the camera based on held
  * keys and updates the hovered tile from mouse position. */
 void game_update(GameState *gs, SDL_Renderer *renderer);  /* CHANGED: needs renderer for coord conversion */

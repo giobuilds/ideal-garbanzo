@@ -87,10 +87,13 @@ SDL_AppResult SDL_AppIterate(void *appstate)
                 return SDL_APP_SUCCESS;   /* clean exit */
 
             case MENU_HIT_NEWGAME:
+                game_new(gs);
+                gs->menu_open = 0;
+                break;
+
             case MENU_HIT_SAVE:
-                SDL_Log("Stub: %s",
-                    hit == MENU_HIT_NEWGAME ? "New Game" : "Save");
-                gs->menu_open = 0;        /* close menu after stub action */
+                game_save(gs, SAVE_FILE_PATH);
+                gs->menu_open = 0;
                 break;
 
             case MENU_HIT_NONE:
