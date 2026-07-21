@@ -33,7 +33,19 @@ static SDL_FRect cog_rect(int screen_w, int screen_h)
     r.y = (float)(bar_y + (HUD_HEIGHT - HUD_SLOT_SIZE) / 2);
     return r;
 }
- 
+
+/* Demolish button rectangle — right-anchored just left of the cog. */
+static SDL_FRect demolish_rect(int screen_w, int screen_h)
+{
+    SDL_FRect cog = cog_rect(screen_w, screen_h);
+    SDL_FRect r;
+    r.w = (float)HUD_SLOT_SIZE;
+    r.h = (float)HUD_SLOT_SIZE;
+    r.x = cog.x - (float)HUD_SLOT_PAD - r.w;
+    r.y = cog.y;
+    return r;
+}
+
 /* One menu button rectangle.
  * Buttons are stacked vertically, centred on the screen. */
 static SDL_FRect menu_btn_rect(int screen_w, int screen_h, int i)
@@ -73,11 +85,20 @@ int ui_cog_hit_test(int screen_w, int screen_h,
             (float)mouse_y >= r.y && (float)mouse_y < r.y + r.h);
 }
 
+int ui_demolish_hit_test(int screen_w, int screen_h,
+                         int mouse_x, int mouse_y)
+{
+    SDL_FRect r = demolish_rect(screen_w, screen_h);
+    return ((float)mouse_x >= r.x && (float)mouse_x < r.x + r.w &&
+            (float)mouse_y >= r.y && (float)mouse_y < r.y + r.h);
+}
+
 /* ---- ui_draw ------------------------------------------- */
 void ui_draw(SDL_Renderer *renderer,
              int screen_w, int screen_h,
              BuildingType selected,
-             int mouse_x, int mouse_y, int menu_open)
+             int mouse_x, int mouse_y, int menu_open,
+             int demolish_active)
 {
     int i;
     float bar_y = (float)(screen_h - HUD_HEIGHT);
@@ -170,6 +191,34 @@ void ui_draw(SDL_Renderer *renderer,
         }
     }
  
+    /* --- Demolish button --------------------------------- */
+    {
+        SDL_FRect r    = demolish_rect(screen_w, screen_h);
+        int       hovr = ui_demolish_hit_test(screen_w, screen_h, mouse_x, mouse_y);
+
+        SDL_SetRenderDrawColor(renderer,
+            (hovr || demolish_active) ? 90 : 45,
+            (hovr || demolish_active) ? 30 : 22,
+            (hovr || demolish_active) ? 28 : 18, 255);
+        SDL_RenderFillRect(renderer, &r);
+
+        /* Border: bright red while active, dim otherwise */
+        if (demolish_active)
+            SDL_SetRenderDrawColor(renderer, 255, 90, 70, 255);
+        else if (hovr)
+            SDL_SetRenderDrawColor(renderer, 200, 110, 90, 255);
+        else
+            SDL_SetRenderDrawColor(renderer, 90, 50, 42, 255);
+        SDL_RenderRect(renderer, &r);
+
+        /* Icon: a simple X made of two crossing lines, matching the
+         * cog's "abstract geometric shape" style rather than a real
+         * pictogram (no sprite system exists — see render.c). */
+        SDL_SetRenderDrawColor(renderer, 230, 90, 75, 255);
+        SDL_RenderLine(renderer, r.x+16.0f, r.y+16.0f, r.x+r.w-16.0f, r.y+r.h-16.0f);
+        SDL_RenderLine(renderer, r.x+r.w-16.0f, r.y+16.0f, r.x+16.0f, r.y+r.h-16.0f);
+    }
+
     /* --- Cog button ------------------------------------- */
     {
         SDL_FRect r    = cog_rect(screen_w, screen_h);

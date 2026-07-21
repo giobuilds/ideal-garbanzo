@@ -20,11 +20,10 @@ static int find_free_agent_slot(Agent agents[], int *agent_count)
 {
     int i;
 
-    /* Unlike building_place() (which only ever appends — there's no
-     * demolish tool, so its "first inactive slot" comment never
-     * actually triggers), agent slots really do need reuse: a
-     * house's residents legitimately grows and shrinks every
-     * NEEDS_INTERVAL, so churn is frequent, not append-only. */
+    /* Same find-inactive-or-append reuse building_place() does now:
+     * a house's residents legitimately grows and shrinks every
+     * NEEDS_INTERVAL (and a demolished House deactivates its agents
+     * outright), so churn is frequent, not append-only. */
     for (i = 0; i < *agent_count; i++)
         if (!agents[i].active) return i;
 
@@ -153,9 +152,13 @@ void agents_assign_jobs(Agent agents[], int agent_count,
 /* Builds the road route from `from_idx`'s footprint to `to_idx`'s
  * footprint into a->path[]/path_len, followed by to_idx's own tile
  * as the final "last mile" waypoint. Sets path_len to 0 on failure
- * (no route) — shouldn't happen in practice since a job is only ever
- * assigned when it was already reachable and buildings/roads are
- * never removed, but handled defensively rather than assumed. */
+ * (no route) — can genuinely happen now if a road the route depended
+ * on was demolished since the job was assigned (see agents_update()'s
+ * callers: both just retry next frame rather than assuming success).
+ * Note this only affects starting a *new* leg of the commute — an
+ * agent already mid-walk doesn't re-validate its stored path, so
+ * destroying a road out from under one just means its dot crosses a
+ * tile that's no longer a road on its way, not a stuck/crashed agent. */
 static void build_commute_path(const Building buildings[], int count,
                                int from_idx, int to_idx, Agent *a)
 {

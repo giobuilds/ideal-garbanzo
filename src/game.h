@@ -85,11 +85,35 @@ typedef struct {
     int          agent_count;
 
     /* Phase 5: seconds since the last agent_assign_jobs() pass —
-     * periodic rather than every frame, since open jobs only change
-     * when a producer is placed or a house's population grows (see
-     * agent.h's doc comment on why buildings never need reassignment
-     * — there's no demolish tool). */
+     * periodic rather than every frame, since open jobs mostly only
+     * change when a producer is placed, a house's population grows,
+     * or one is demolished (game_demolish_building already snaps any
+     * agent working there back to unemployed immediately; the next
+     * periodic pass just picks up the resulting reassignment). */
     float        agent_assign_timer;
+
+    /* Build-confirmation popup: every building except Road goes
+     * through this instead of placing instantly (Road is exempt —
+     * see game_try_place_road()'s doc comment). row/col are captured
+     * at popup-open time, NOT read from hovered_row/col at confirm
+     * time — by then the mouse has moved to the popup's buttons,
+     * which live in a totally different screen region and would
+     * resolve to an unrelated tile if hover were re-queried. */
+    int build_confirm_open;
+    int build_confirm_row, build_confirm_col;
+    int build_confirm_payment;   /* 0 = pay resources, 1 = pay Gold */
+
+    /* Road drag-placement: the last tile this drag already placed
+     * at, so holding the button over one tile doesn't re-place every
+     * frame. Reset to -1 whenever the button isn't held, so a new
+     * drag's first tile is never skipped as "unchanged". */
+    int drag_last_row, drag_last_col;
+
+    /* Demolish tool: 1 while active (mutually exclusive with
+     * selected_building — selecting either clears the other).
+     * Clicking a building while active removes it via
+     * game_demolish_building(). */
+    int demolish_mode;
 } GameState;
 
 /* Allocate and initialise a new GameState.
@@ -123,9 +147,24 @@ int  game_load(GameState *gs, const char *path);
  * keys and updates the hovered tile from mouse position. */
 void game_update(GameState *gs, SDL_Renderer *renderer);  /* CHANGED: needs renderer for coord conversion */
 
-/* Called when the player left-clicks on the map.
- * Attempts to place selected_building at the hovered tile. */
-void game_place_building(GameState *gs);
+/* Attempts to place a Road at (row, col) directly — no confirmation
+ * popup. Roads are the one building type exempt from
+ * game_place_building_confirmed()'s popup: a drag gesture placing
+ * many tiles can't reasonably pop up a per-tile confirmation, and a
+ * single non-dragged click on Road behaves the same way for
+ * consistency. Checks placement validity and affordability itself;
+ * returns 1 on success, 0 otherwise (no side effects on failure). */
+int game_try_place_road(GameState *gs, int row, int col);
+
+/* Commits the pending build-confirmation popup: places
+ * selected_building at build_confirm_row/col (not the live hover —
+ * see GameState's doc comment on why) and deducts payment.
+ * pay_with_gold selects which of the popup's two options was chosen:
+ * 0 deducts the normal per-resource cost[] (as building_can_afford
+ * checks), 1 deducts building_gold_equivalent_cost() in Gold only.
+ * No-op (no placement, no deduction) if the chosen payment can't
+ * actually be afforded. */
+void game_place_building_confirmed(GameState *gs, int pay_with_gold);
 
 /* Returns the buildings[] index of the active building whose
  * footprint contains (row, col), or -1 if none. Used to detect a
@@ -138,5 +177,20 @@ int game_find_building_at(const GameState *gs, int row, int col);
  * a no-op if res is RES_GOLD or qty <= 0. Used by the Marketplace
  * trade screen. */
 void game_sell_resource(GameState *gs, ResourceType res, int qty);
+
+/* Removes the building at buildings[idx] (marks it inactive — the
+ * slot itself is left for building_place() to reuse later, same
+ * pattern as every other active-flagged array here). Free — no
+ * refund. Also cleans up anything that referenced it: a demolished
+ * House's PopData is deactivated (agents_sync() despawns its agents
+ * next frame); any agent with home_idx == idx is deactivated
+ * immediately (its home is simply gone); any agent with
+ * work_idx == idx is snapped back to unemployed and standing at
+ * home, so a destroyed workplace doesn't leave it permanently
+ * "employed" at a dead job (agent_assign_jobs() only reassigns
+ * agents with work_idx == -1). Recomputes storage capacity if the
+ * demolished building was a Warehouse. No-op if idx is out of range
+ * or already inactive. */
+void game_demolish_building(GameState *gs, int idx);
 
 #endif /* GAME_H */

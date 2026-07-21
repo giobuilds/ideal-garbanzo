@@ -48,12 +48,21 @@ SDL_AppResult input_handle_event(InputState *input,
         input->scroll_y += event->wheel.y;
         break;
 
+    case SDL_EVENT_MOUSE_BUTTON_DOWN:
+        input->mouse_x = (int)event->button.x;
+        input->mouse_y = (int)event->button.y;
+        if (event->button.button == SDL_BUTTON_LEFT)
+            input->left_down = 1;
+        break;
+
     case SDL_EVENT_MOUSE_BUTTON_UP:
         /* CHANGED: store click position in raw window coords too */
         input->mouse_x = (int)event->button.x;  /* update pos on click */
         input->mouse_y = (int)event->button.y;
-        if (event->button.button == SDL_BUTTON_LEFT)
-            input->left_click  = 1;
+        if (event->button.button == SDL_BUTTON_LEFT) {
+            input->left_click = 1;
+            input->left_down  = 0;
+        }
         if (event->button.button == SDL_BUTTON_RIGHT)
             input->right_click = 1;
         break;

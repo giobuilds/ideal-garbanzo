@@ -17,10 +17,12 @@
  *   AGENT_WORKING         -- at workplace; counts toward worker_count
  *   AGENT_COMMUTING_HOME  -- walking workplace -> home
  *
- * Job assignment (agent_assign_jobs) is periodic, not per-frame:
- * buildings are never removed in this codebase (no demolish tool),
- * so open jobs only change when a new producer is placed or a
- * house's population grows -- there is nothing to reassign otherwise.
+ * Job assignment (agent_assign_jobs) is periodic, not per-frame: open
+ * jobs mostly only change when a producer is placed, a house's
+ * population grows, or one is demolished (game_demolish_building,
+ * game.c, immediately snaps any agent working there back to
+ * unemployed — the next periodic pass just picks up the resulting
+ * reassignment, no urgency).
  * ========================================================= */
 
 #include "building.h"
@@ -46,9 +48,9 @@ typedef enum {
 typedef struct {
     int        active;      /* like Building/PopData: reused via
                               * find-inactive-or-append, NOT append-only --
-                              * residents grow/shrink every NEEDS_INTERVAL,
-                              * so agent churn is frequent (unlike buildings,
-                              * which are never removed). */
+                              * residents grow/shrink every NEEDS_INTERVAL
+                              * (and a House can be demolished outright),
+                              * so agent churn is frequent. */
     int        home_idx;    /* buildings[] index of the House */
     int        work_idx;    /* buildings[] index of workplace, -1 if none */
     AgentState state;
