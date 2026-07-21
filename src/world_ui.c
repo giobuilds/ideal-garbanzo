@@ -4,6 +4,7 @@
 #include "render.h"
 #include "fonts.h"
 #include "map.h"
+#include "resource.h"
 #include <SDL3/SDL.h>
 
 /* Fixed node positions as a fraction of the screen, so the layout
@@ -76,8 +77,78 @@ static int point_in(SDL_FRect r, int x, int y)
            (float)y >= r.y && (float)y < r.y + r.h;
 }
 
+/* Where a ship's marker sits: on its island's node when docked, or
+ * lerped along the lane between two nodes while at sea. Ships at the
+ * same island are fanned out slightly so a fleet is countable. */
+static void ship_marker_pos(int screen_w, int screen_h,
+                            const Ship *sh, int idx, float *ox, float *oy)
+{
+    float ax, ay, bx, by, t;
+    float half_w = (float)TILE_W * WORLD_NODE_ZOOM / 2.0f;
+    float half_h = (float)TILE_H * WORLD_NODE_ZOOM / 2.0f;
+
+    if (sh->at_island >= 0) {
+        node_origin(screen_w, screen_h, sh->at_island, &ax, &ay);
+        *ox = ax + half_w + (float)((idx % 4) - 1) * 12.0f;
+        *oy = ay + half_h + 26.0f;
+        return;
+    }
+
+    node_origin(screen_w, screen_h, sh->from_island, &ax, &ay);
+    node_origin(screen_w, screen_h, sh->to_island,   &bx, &by);
+    t   = sh->progress;
+    *ox = (ax + half_w) + ((bx + half_w) - (ax + half_w)) * t;
+    *oy = (ay + half_h) + ((by + half_h) - (ay + half_h)) * t;
+}
+
+static SDL_FRect ship_marker_rect(int screen_w, int screen_h,
+                                  const Ship *sh, int idx)
+{
+    SDL_FRect r;
+    float x, y;
+    ship_marker_pos(screen_w, screen_h, sh, idx, &x, &y);
+    r.w = 14.0f; r.h = 14.0f;
+    r.x = x - r.w / 2.0f;
+    r.y = y - r.h / 2.0f;
+    return r;
+}
+
+/* Selected-ship panel, right-hand side. */
+static SDL_FRect panel_rect(int screen_w, int screen_h)
+{
+    SDL_FRect r;
+    r.w = (float)WORLD_PANEL_W;
+    r.h = (float)(RES_COUNT * WORLD_ROW_H + 110);
+    r.x = (float)screen_w - r.w - 40.0f;
+    r.y = 90.0f;
+    (void)screen_h;
+    return r;
+}
+
+/* Load (i=0) / Unload (i=1) button for resource row `res`. */
+static SDL_FRect cargo_btn_rect(int screen_w, int screen_h, int res, int i)
+{
+    SDL_FRect p = panel_rect(screen_w, screen_h);
+    SDL_FRect r;
+    r.w = 52.0f; r.h = 20.0f;
+    r.x = p.x + p.w - 10.0f - (2.0f - (float)i) * (r.w + 6.0f);
+    r.y = p.y + 56.0f + (float)res * (float)WORLD_ROW_H;
+    return r;
+}
+
+static SDL_FRect colonise_btn_rect(int screen_w, int screen_h)
+{
+    SDL_FRect p = panel_rect(screen_w, screen_h);
+    SDL_FRect r;
+    r.w = p.w - 20.0f; r.h = 30.0f;
+    r.x = p.x + 10.0f;
+    r.y = p.y + p.h - 40.0f;
+    return r;
+}
+
 void world_ui_draw(SDL_Renderer *renderer, int screen_w, int screen_h,
                    const Island islands[], int island_count, int current,
+                   const Ship ships[], int ship_count, int selected_ship,
                    int mouse_x, int mouse_y)
 {
     SDL_FRect sea = { 0.0f, 0.0f, (float)screen_w, (float)screen_h };
@@ -141,6 +212,120 @@ void world_ui_draw(SDL_Renderer *renderer, int screen_w, int screen_h,
         }
     }
 
+    /* Sea lanes for voyages in progress, drawn under the markers. */
+    {
+        int si;
+        SDL_SetRenderDrawColor(renderer, 70, 110, 150, 255);
+        for (si = 0; si < ship_count; si++) {
+            float ax, ay, bx, by;
+            float hw = (float)TILE_W * WORLD_NODE_ZOOM / 2.0f;
+            float hh = (float)TILE_H * WORLD_NODE_ZOOM / 2.0f;
+            if (!ships[si].active || ships[si].at_island >= 0) continue;
+            node_origin(screen_w, screen_h, ships[si].from_island, &ax, &ay);
+            node_origin(screen_w, screen_h, ships[si].to_island,   &bx, &by);
+            SDL_RenderLine(renderer, ax + hw, ay + hh, bx + hw, by + hh);
+        }
+    }
+
+    /* Ship markers — the same small filled square render_agents()
+     * uses for people, since there is no sprite system. */
+    {
+        int si;
+        for (si = 0; si < ship_count; si++) {
+            SDL_FRect mr;
+            if (!ships[si].active) continue;
+            mr = ship_marker_rect(screen_w, screen_h, &ships[si], si);
+
+            if (si == selected_ship)
+                SDL_SetRenderDrawColor(renderer, 255, 225, 120, 255);
+            else
+                SDL_SetRenderDrawColor(renderer, 225, 235, 245, 255);
+            SDL_RenderFillRect(renderer, &mr);
+            SDL_SetRenderDrawColor(renderer, 30, 50, 70, 255);
+            SDL_RenderRect(renderer, &mr);
+        }
+    }
+
+    /* Selected-ship panel: cargo manifest and the actions that need
+     * a ship to be docked somewhere. */
+    if (selected_ship >= 0 && selected_ship < ship_count &&
+        ships[selected_ship].active) {
+        const Ship *sh = &ships[selected_ship];
+        SDL_FRect   p  = panel_rect(screen_w, screen_h);
+        SDL_Color   txt = { 225, 235, 245, 255 };
+        SDL_Color   dim = { 150, 170, 190, 255 };
+        char        buf[96];
+        int         res;
+
+        SDL_SetRenderDrawColor(renderer, 24, 42, 64, 235);
+        SDL_RenderFillRect(renderer, &p);
+        SDL_SetRenderDrawColor(renderer, 90, 130, 170, 255);
+        SDL_RenderRect(renderer, &p);
+
+        SDL_snprintf(buf, sizeof(buf), "Ship %d", selected_ship);
+        font_draw_text(renderer, FONT_NORMAL, buf,
+                       (int)(p.x + 10.0f), (int)(p.y + 8.0f), txt);
+
+        if (sh->at_island >= 0)
+            SDL_snprintf(buf, sizeof(buf), "Docked at %s",
+                        islands[sh->at_island].name);
+        else
+            SDL_snprintf(buf, sizeof(buf), "At sea: %s -> %s (%d%%)",
+                        islands[sh->from_island].name,
+                        islands[sh->to_island].name,
+                        (int)(sh->progress * 100.0f));
+        font_draw_text(renderer, FONT_SMALL, buf,
+                       (int)(p.x + 10.0f), (int)(p.y + 30.0f), dim);
+
+        for (res = 0; res < RES_COUNT; res++) {
+            SDL_FRect lr = cargo_btn_rect(screen_w, screen_h, res, 0);
+            SDL_FRect ur = cargo_btn_rect(screen_w, screen_h, res, 1);
+            int docked = (sh->at_island == current);
+
+            SDL_snprintf(buf, sizeof(buf), "%s %d",
+                        RESOURCE_NAMES[res], sh->cargo[res]);
+            font_draw_text(renderer, FONT_SMALL, buf,
+                           (int)(p.x + 10.0f), (int)(lr.y + 3.0f),
+                           sh->cargo[res] ? txt : dim);
+
+            /* Loading only means anything at the island you are
+             * looking at, since that is whose stockpile it moves. */
+            SDL_SetRenderDrawColor(renderer, docked ? 45 : 30,
+                                   docked ? 70 : 45, docked ? 95 : 60, 255);
+            SDL_RenderFillRect(renderer, &lr);
+            SDL_RenderFillRect(renderer, &ur);
+            SDL_SetRenderDrawColor(renderer, docked ? 110 : 60,
+                                   docked ? 150 : 80, docked ? 190 : 105, 255);
+            SDL_RenderRect(renderer, &lr);
+            SDL_RenderRect(renderer, &ur);
+            font_draw_text(renderer, FONT_SMALL, "Load",
+                           (int)(lr.x + 9.0f), (int)(lr.y + 3.0f),
+                           docked ? txt : dim);
+            font_draw_text(renderer, FONT_SMALL, "Unload",
+                           (int)(ur.x + 4.0f), (int)(ur.y + 3.0f),
+                           docked ? txt : dim);
+        }
+
+        {
+            SDL_FRect cb = colonise_btn_rect(screen_w, screen_h);
+            int can = sh->at_island >= 0
+                   && !islands[sh->at_island].settled
+                   && sh->cargo[RES_GOLD] >= COLONY_FOUNDING_GOLD;
+            SDL_Color lbl = can ? txt : dim;
+
+            SDL_SetRenderDrawColor(renderer, can ? 40 : 28,
+                                   can ? 95 : 48, can ? 55 : 34, 255);
+            SDL_RenderFillRect(renderer, &cb);
+            SDL_SetRenderDrawColor(renderer, can ? 110 : 60,
+                                   can ? 190 : 90, can ? 120 : 66, 255);
+            SDL_RenderRect(renderer, &cb);
+            SDL_snprintf(buf, sizeof(buf), "Found Colony (%d Gold)",
+                        COLONY_FOUNDING_GOLD);
+            font_draw_text(renderer, FONT_SMALL, buf,
+                           (int)(cb.x + 10.0f), (int)(cb.y + 8.0f), lbl);
+        }
+    }
+
     {
         SDL_FRect cr   = close_btn_rect(screen_w, screen_h);
         int       hovr = point_in(cr, mouse_x, mouse_y);
@@ -158,12 +343,47 @@ void world_ui_draw(SDL_Renderer *renderer, int screen_w, int screen_h,
 }
 
 WorldHit world_ui_hit_test(int screen_w, int screen_h, int island_count,
-                           int mouse_x, int mouse_y, int *out_island)
+                           const Ship ships[], int ship_count,
+                           int selected_ship, int mouse_x, int mouse_y,
+                           int *out_island, int *out_ship, ResourceType *out_res)
 {
     int i;
 
     if (point_in(close_btn_rect(screen_w, screen_h), mouse_x, mouse_y))
         return WORLD_HIT_CLOSE;
+
+    /* Panel widgets first: they overlay the sea, so a click there must
+     * not fall through to whatever island node sits behind them. */
+    if (selected_ship >= 0 && selected_ship < ship_count &&
+        ships[selected_ship].active) {
+        int res;
+        if (point_in(colonise_btn_rect(screen_w, screen_h), mouse_x, mouse_y))
+            return WORLD_HIT_COLONISE;
+        for (res = 0; res < RES_COUNT; res++) {
+            if (point_in(cargo_btn_rect(screen_w, screen_h, res, 0),
+                        mouse_x, mouse_y)) {
+                if (out_res) *out_res = (ResourceType)res;
+                return WORLD_HIT_LOAD;
+            }
+            if (point_in(cargo_btn_rect(screen_w, screen_h, res, 1),
+                        mouse_x, mouse_y)) {
+                if (out_res) *out_res = (ResourceType)res;
+                return WORLD_HIT_UNLOAD;
+            }
+        }
+        if (point_in(panel_rect(screen_w, screen_h), mouse_x, mouse_y))
+            return WORLD_HIT_NONE;   /* swallow clicks on panel chrome */
+    }
+
+    /* Ships before islands: a docked marker sits on its node. */
+    for (i = 0; i < ship_count; i++) {
+        if (!ships[i].active) continue;
+        if (point_in(ship_marker_rect(screen_w, screen_h, &ships[i], i),
+                    mouse_x, mouse_y)) {
+            if (out_ship) *out_ship = i;
+            return WORLD_HIT_SHIP;
+        }
+    }
 
     for (i = 0; i < island_count; i++) {
         if (point_in(node_bounds(screen_w, screen_h, i), mouse_x, mouse_y)) {

@@ -14,6 +14,7 @@
 #include "demolish_confirm_ui.h" /* bulldozer confirmation */
 #include "tier_upgrade_ui.h" /* production chains: population tier upgrade */
 #include "world_ui.h"        /* archipelago overview */
+#include "ship.h"
 #include "fonts.h"    /* Phase 5 */
 
 typedef struct { SDL_Window *w; SDL_Renderer *r; GameState *g; } App;
@@ -94,18 +95,78 @@ SDL_AppResult SDL_AppIterate(void *appstate)
          * opening it is a HUD action, and the confirm popups are all
          * closed by then. */
         if (gs->world_open) {
-            int      target = -1;
-            WorldHit hit    = world_ui_hit_test(SCREEN_W, SCREEN_H, MAX_ISLANDS,
+            int          target = -1, tship = -1;
+            ResourceType tres   = RES_WOOD;
+            WorldHit     hit    = world_ui_hit_test(SCREEN_W, SCREEN_H, MAX_ISLANDS,
+                                                gs->ships, gs->ship_count,
+                                                gs->world_selected_ship,
                                                 gs->input.logical_x,
-                                                gs->input.logical_y, &target);
-            if (hit == WORLD_HIT_ISLAND && target >= 0) {
-                game_set_current_island(gs, target);
-                isl = game_cur_island(gs);   /* the view just moved */
-            } else if (hit == WORLD_HIT_CLOSE) {
+                                                gs->input.logical_y,
+                                                &target, &tship, &tres);
+            switch (hit) {
+            case WORLD_HIT_SHIP:
+                /* Click a ship to select it, again to deselect. */
+                gs->world_selected_ship =
+                    (gs->world_selected_ship == tship) ? -1 : tship;
+                break;
+
+            case WORLD_HIT_ISLAND:
+                if (gs->world_selected_ship >= 0) {
+                    /* A ship is selected, so an island click is an
+                     * order to sail there rather than a view change —
+                     * the same select-then-click grammar the HUD uses
+                     * for placing buildings. */
+                    Ship *sh = &gs->ships[gs->world_selected_ship];
+                    if (sh->active && sh->at_island >= 0 &&
+                        sh->at_island != target) {
+                        sh->from_island = sh->at_island;
+                        sh->to_island   = target;
+                        sh->at_island   = -1;     /* now at sea */
+                        sh->progress    = 0.0f;
+                    }
+                } else if (target >= 0) {
+                    game_set_current_island(gs, target);
+                    isl = game_cur_island(gs);   /* the view just moved */
+                }
+                break;
+
+            case WORLD_HIT_LOAD:
+                game_ship_transfer(gs, gs->world_selected_ship, tres, 10);
+                break;
+
+            case WORLD_HIT_UNLOAD:
+                game_ship_transfer(gs, gs->world_selected_ship, tres, -10);
+                break;
+
+            case WORLD_HIT_COLONISE:
+                if (gs->world_selected_ship >= 0) {
+                    int at = gs->ships[gs->world_selected_ship].at_island;
+                    if (game_colonise(gs, gs->world_selected_ship, at)) {
+                        game_set_current_island(gs, at);
+                        isl = game_cur_island(gs);
+                    }
+                }
+                break;
+
+            case WORLD_HIT_CLOSE:
                 gs->world_open = 0;
+                break;
+
+            case WORLD_HIT_NONE:
+            default:
+                /* A click on open sea does nothing, so a misclick
+                 * can't dismiss the map. Close or right-click. */
+                break;
             }
-            /* WORLD_HIT_NONE: a click on open sea does nothing, so a
-             * misclick can't dismiss the map. Close or right-click. */
+
+        /* Ship-build confirmation, from clicking a Shipyard. */
+        } else if (gs->ship_build_open) {
+            TierUpgradeHit hit = tier_upgrade_ui_hit_test(SCREEN_W, SCREEN_H,
+                                                          gs->input.logical_x,
+                                                          gs->input.logical_y);
+            if (hit == TU_HIT_OK)
+                game_build_ship(gs);
+            gs->ship_build_open = 0;
 
         /* Tier-upgrade confirmation: same top priority as the other
          * confirm popups — mutually exclusive with them in practice. */
@@ -255,23 +316,30 @@ SDL_AppResult SDL_AppIterate(void *appstate)
                         gs->demolish_confirm_idx  = found;
                     }
                 } else if (gs->selected_building == BUILDING_NONE) {
-                    /* Phase 4: nothing selected — clicking a placed,
-                     * connected Marketplace opens the trade screen;
-                     * production chains: clicking a placed, connected
-                     * Farmers' House opens the tier-upgrade popup
-                     * instead of doing nothing. */
+                    /* Nothing selected, so a map click means "interact
+                     * with whatever building is here". Every case needs
+                     * the building to be road-connected, so that check
+                     * is hoisted out of the switch rather than repeated
+                     * per branch. */
                     int found = game_find_building_at(gs, gs->hovered_row,
                                                       gs->hovered_col);
-                    if (found >= 0 &&
-                        isl->buildings[found].type == BUILDING_MARKETPLACE &&
-                        isl->buildings[found].connected) {
-                        gs->trade_open        = 1;
-                        gs->trade_building_idx = found;
-                    } else if (found >= 0 &&
-                              isl->buildings[found].type == BUILDING_HOUSE &&
-                              isl->buildings[found].connected) {
-                        gs->tier_upgrade_open = 1;
-                        gs->tier_upgrade_idx  = found;
+                    if (found >= 0 && isl->buildings[found].connected) {
+                        switch (isl->buildings[found].type) {
+                        case BUILDING_MARKETPLACE:
+                            gs->trade_open         = 1;
+                            gs->trade_building_idx = found;
+                            break;
+                        case BUILDING_HOUSE:
+                            gs->tier_upgrade_open = 1;
+                            gs->tier_upgrade_idx  = found;
+                            break;
+                        case BUILDING_SHIPYARD:
+                            gs->ship_build_open = 1;
+                            gs->ship_build_idx  = found;
+                            break;
+                        default:
+                            break;   /* not an interactive building */
+                        }
                     }
                 } else if (gs->selected_building == BUILDING_ROAD) {
                     /* Roads are exempt from the confirm popup — also
@@ -299,6 +367,8 @@ SDL_AppResult SDL_AppIterate(void *appstate)
     if (gs->input.right_click) {
         if (gs->world_open)
             gs->world_open = 0;
+        else if (gs->ship_build_open)
+            gs->ship_build_open = 0;
         else if (gs->tier_upgrade_open)
             gs->tier_upgrade_open = 0;       /* cancel, no upgrade */
         else if (gs->demolish_confirm_open)
@@ -381,14 +451,28 @@ SDL_AppResult SDL_AppIterate(void *appstate)
     /* Tier-upgrade confirmation popup, drawn on top when open */
     if (gs->tier_upgrade_open)
         tier_upgrade_ui_draw(app->r, SCREEN_W, SCREEN_H,
+                             "Upgrade to Worker's House?",
+                             "Workers also need Beer.",
                              TIER_UPGRADE_COST_GOLD,
                              isl->stockpile.amount[RES_GOLD] >= TIER_UPGRADE_COST_GOLD,
+                             gs->input.logical_x, gs->input.logical_y);
+
+    /* Ship-build confirmation reuses the tier-upgrade popup's shape:
+     * both are "spend Gold to change this building's situation",
+     * so a second near-identical *_ui file would be pure duplication. */
+    if (gs->ship_build_open)
+        tier_upgrade_ui_draw(app->r, SCREEN_W, SCREEN_H,
+                             "Build a Ship?",
+                             "Lay down a ship at this Shipyard.",
+                             SHIP_BUILD_COST_GOLD,
+                             isl->stockpile.amount[RES_GOLD] >= SHIP_BUILD_COST_GOLD,
                              gs->input.logical_x, gs->input.logical_y);
 
     /* Archipelago overview on top of everything when open */
     if (gs->world_open)
         world_ui_draw(app->r, SCREEN_W, SCREEN_H,
                       gs->islands, MAX_ISLANDS, gs->current_island,
+                      gs->ships, gs->ship_count, gs->world_selected_ship,
                       gs->input.logical_x, gs->input.logical_y);
 
     SDL_RenderPresent(app->r);

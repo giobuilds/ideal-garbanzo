@@ -26,24 +26,35 @@
 
 #include <SDL3/SDL.h>
 #include "island.h"
+#include "ship.h"
 
 #define WORLD_NODE_ZOOM   2.2f   /* island diamond size vs a map tile */
 #define WORLD_TITLE_Y      40
 
+#define WORLD_PANEL_W    360   /* selected-ship panel, right side */
+#define WORLD_ROW_H       26
+
 typedef enum {
-    WORLD_HIT_NONE   = 0,   /* empty sea — no effect                 */
-    WORLD_HIT_CLOSE  = 1,   /* the Close button                      */
-    WORLD_HIT_ISLAND = 2    /* an island node — *out_island is set   */
+    WORLD_HIT_NONE     = 0,  /* empty sea — no effect                  */
+    WORLD_HIT_CLOSE    = 1,  /* the Close button                       */
+    WORLD_HIT_ISLAND   = 2,  /* an island node — *out_island is set    */
+    WORLD_HIT_SHIP     = 3,  /* a ship marker — *out_ship is set       */
+    WORLD_HIT_LOAD     = 4,  /* load a resource  — *out_res is set     */
+    WORLD_HIT_UNLOAD   = 5,  /* unload a resource — *out_res is set    */
+    WORLD_HIT_COLONISE = 6   /* found a colony with the selected ship  */
 } WorldHit;
 
 /* Draw the overview. `islands` is the whole archipelago and
  * `current` the one being viewed (highlighted). */
 void world_ui_draw(SDL_Renderer *renderer, int screen_w, int screen_h,
                    const Island islands[], int island_count, int current,
+                   const Ship ships[], int ship_count, int selected_ship,
                    int mouse_x, int mouse_y);
 
 /* Hit-test a click. On WORLD_HIT_ISLAND, *out_island is the index. */
 WorldHit world_ui_hit_test(int screen_w, int screen_h, int island_count,
-                           int mouse_x, int mouse_y, int *out_island);
+                           const Ship ships[], int ship_count,
+                           int selected_ship, int mouse_x, int mouse_y,
+                           int *out_island, int *out_ship, ResourceType *out_res);
 
 #endif /* WORLD_UI_H */

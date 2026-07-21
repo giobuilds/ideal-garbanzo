@@ -57,6 +57,10 @@ typedef enum {
      * directly from the HUD (see hud_placeable below). */
     BUILDING_HOUSE_WORKER = 10,
 
+    /* Colonisation: the only source of ships, and therefore the only
+     * way to reach another island. Coastal by necessity. */
+    BUILDING_SHIPYARD     = 11,
+
     BUILDING_TYPE_COUNT
 } BuildingType;
 
