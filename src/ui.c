@@ -1,6 +1,7 @@
 /*  ui.c  --  HUD rendering and hit-testing  */
 
 #include "ui.h"
+#include "fonts.h"
 #include <string.h>   /* strlen (unused yet, kept for later) */
 
 /* ---- slot_rect -----------------------------------------
@@ -248,13 +249,12 @@ void ui_menu_draw(SDL_Renderer *renderer,
     SDL_SetRenderDrawColor(renderer, 120, 100, 60, 255);
     SDL_RenderLine(renderer, px, py+34.0f, px+(float)MENU_W, py+34.0f);
  
-    /* Title text placeholder — three small dashes
-     * (real text needs SDL_ttf, coming in a later phase) */
-    SDL_SetRenderDrawColor(renderer, 200, 175, 110, 255);
-    SDL_FRect t1 = { px+12.0f, py+13.0f, 30.0f, 4.0f };
-    SDL_FRect t2 = { px+48.0f, py+13.0f, 20.0f, 4.0f };
-    SDL_RenderFillRect(renderer, &t1);
-    SDL_RenderFillRect(renderer, &t2);
+    /* Title text */
+    {
+        SDL_Color title_col = { 200, 175, 110, 255 };
+        font_draw_text(renderer, FONT_NORMAL, "Menu",
+                       (int)(px + 12.0f), (int)(py + 8.0f), title_col);
+    }
  
     /* --- Buttons --------------------------------------- */
     for (i = 0; i < 3; i++) {
@@ -284,22 +284,18 @@ void ui_menu_draw(SDL_Renderer *renderer,
             hovr ? 100 : 50, 255);
         SDL_RenderRect(renderer, &r);
  
-        /* Button label placeholder — coloured bar
-         * Length encodes which button it is so they're distinct */
-        float label_w = (i == 0) ? 70.0f : (i == 1) ? 36.0f : 40.0f;
-        SDL_FRect label = {
-            r.x + 12.0f,
-            r.y + (r.h - 6.0f) / 2.0f,
-            label_w, 6.0f
-        };
-        SDL_SetRenderDrawColor(renderer,
-            (i == 2) ? 220 : 190,
-            (i == 2) ?  80 : 165,
-            (i == 2) ?  80 : 100, 200);
-        SDL_RenderFillRect(renderer, &label);
- 
-        /* Stub label: small "—" dash to right of bar */
-        (void)MENU_LABELS[i];   /* reserved for SDL_ttf phase */
+        /* Button label */
+        {
+            SDL_Color label_col;
+            label_col.r = (i == 2) ? 220 : 190;
+            label_col.g = (i == 2) ?  80 : 165;
+            label_col.b = (i == 2) ?  80 : 100;
+            label_col.a = 255;
+            font_draw_text(renderer, FONT_NORMAL, MENU_LABELS[i],
+                           (int)(r.x + 12.0f),
+                           (int)(r.y + (r.h - 18.0f) / 2.0f),
+                           label_col);
+        }
     }
 }
  
