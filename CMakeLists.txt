@@ -31,6 +31,7 @@ set(SOURCES
     src/tier_upgrade_ui.c
     src/island.c
     src/world_ui.c
+    src/ship.c
 )
 
 add_executable(anno_clone ${SOURCES})

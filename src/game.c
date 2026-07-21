@@ -8,6 +8,7 @@
 #include "connectivity.h"
 #include "agent.h"
 #include "island.h"
+#include "ship.h"
 #include "ui.h"
 #include <SDL3/SDL.h>
 #include <stdlib.h>
@@ -42,6 +43,8 @@ void game_set_current_island(GameState *gs, int idx)
     gs->demolish_confirm_idx  = -1;
     gs->tier_upgrade_open     = 0;
     gs->tier_upgrade_idx      = -1;
+    gs->ship_build_open       = 0;
+    gs->ship_build_idx        = -1;
     gs->demolish_mode         = 0;
     gs->selected_building     = BUILDING_NONE;
     gs->placement_valid       = 0;
@@ -97,6 +100,11 @@ static void game_reset_world(GameState *gs, uint32_t seed)
 
     gs->current_island = 0;
     gs->world_open     = 0;
+    memset(gs->ships, 0, sizeof(gs->ships));
+    gs->ship_count          = 0;
+    gs->world_selected_ship = -1;
+    gs->ship_build_open     = 0;
+    gs->ship_build_idx      = -1;
 
     stockpile_add(&cur(gs)->stockpile, RES_GOLD, STARTING_GOLD);
 
@@ -149,6 +157,7 @@ typedef struct {
     uint32_t version;
     int32_t  island_count;
     int32_t  current_island;
+    int32_t  ship_count;      /* v3: fleet follows the islands */
 } SaveHeader;
 
 typedef struct {
@@ -164,7 +173,7 @@ typedef struct {
 } IslandRecord;
 
 #define SAVE_MAGIC   0x414E4E4Fu  /* "ANNO" */
-#define SAVE_VERSION 2u
+#define SAVE_VERSION 3u
 
 int game_save(const GameState *gs, const char *path)
 {
@@ -181,6 +190,7 @@ int game_save(const GameState *gs, const char *path)
     hdr.version        = SAVE_VERSION;
     hdr.island_count   = MAX_ISLANDS;
     hdr.current_island = gs->current_island;
+    hdr.ship_count     = gs->ship_count;
 
     ok = (SDL_WriteIO(io, &hdr, sizeof(hdr)) == sizeof(hdr));
 
@@ -206,6 +216,11 @@ int game_save(const GameState *gs, const char *path)
           && (p_bytes == 0 || SDL_WriteIO(io, isl->pop_data,  p_bytes) == p_bytes);
     }
 
+    if (ok && gs->ship_count > 0) {
+        size_t sbytes = sizeof(Ship) * (size_t)gs->ship_count;
+        ok = SDL_WriteIO(io, gs->ships, sbytes) == sbytes;
+    }
+
     if (!ok) {
         SDL_Log("game_save: write to %s failed: %s", path, SDL_GetError());
         SDL_CloseIO(io);
@@ -213,7 +228,8 @@ int game_save(const GameState *gs, const char *path)
     }
 
     SDL_CloseIO(io);
-    SDL_Log("Game saved to %s (%d islands)", path, MAX_ISLANDS);
+    SDL_Log("Game saved to %s (%d islands, %d ships)",
+            path, MAX_ISLANDS, gs->ship_count);
     return 1;
 }
 
@@ -262,7 +278,8 @@ int game_load(GameState *gs, const char *path)
     memcpy(&hdr, buf, sizeof(hdr));
     if (hdr.magic != SAVE_MAGIC || hdr.version != SAVE_VERSION ||
         hdr.island_count <= 0 || hdr.island_count > MAX_ISLANDS ||
-        hdr.current_island < 0 || hdr.current_island >= hdr.island_count) {
+        hdr.current_island < 0 || hdr.current_island >= hdr.island_count ||
+        hdr.ship_count < 0 || hdr.ship_count > MAX_SHIPS) {
         SDL_Log("game_load: %s is not a valid v%u save file", path, SAVE_VERSION);
         free(buf);
         return 0;
@@ -286,6 +303,9 @@ int game_load(GameState *gs, const char *path)
         need = (sizeof(Building) + sizeof(PopData)) * (size_t)rec.building_count;
         if (off + need > size) { free(buf); goto truncated; }
         off += need;
+    }
+    if (off + sizeof(Ship) * (size_t)hdr.ship_count > size) {
+        free(buf); goto truncated;
     }
 
     /* Commit pass: everything validated, so nothing below can fail. */
@@ -321,11 +341,18 @@ int game_load(GameState *gs, const char *path)
         agents_sync(isl->agents, &isl->agent_count, isl->buildings,
                     isl->pop_data, isl->building_count);
     }
+    memset(gs->ships, 0, sizeof(gs->ships));
+    gs->ship_count = hdr.ship_count;
+    if (hdr.ship_count > 0)
+        memcpy(gs->ships, buf + off, sizeof(Ship) * (size_t)hdr.ship_count);
+    gs->world_selected_ship = -1;
+
     free(buf);
 
     game_set_current_island(gs, hdr.current_island);
 
-    SDL_Log("Game loaded from %s (%d islands)", path, hdr.island_count);
+    SDL_Log("Game loaded from %s (%d islands, %d ships)",
+            path, hdr.island_count, hdr.ship_count);
     return 1;
 
 truncated:
@@ -429,6 +456,9 @@ void game_update(GameState *gs, SDL_Renderer *renderer)
      * see island_update()'s ordering constraint. */
     for (i = 0; i < MAX_ISLANDS; i++)
         island_update(&gs->islands[i], dt);
+
+    /* Voyages advance independently of any island. */
+    ships_update(gs->ships, gs->ship_count, dt);
 }
 
 /* ---- commit_placement -----------------------------------
@@ -654,4 +684,113 @@ void game_upgrade_house(GameState *gs, int idx)
 
     stockpile_add(&isl->stockpile, RES_GOLD, -TIER_UPGRADE_COST_GOLD);
     isl->buildings[idx].type = BUILDING_HOUSE_WORKER;
+}
+
+/* ---- game_build_ship ------------------------------------- */
+int game_build_ship(GameState *gs)
+{
+    Island *isl = cur(gs);
+    int     i, slot = -1;
+
+    if (!isl->settled) return -1;
+    if (isl->stockpile.amount[RES_GOLD] < SHIP_BUILD_COST_GOLD) return -1;
+
+    /* Reuse a scuttled slot before growing the fleet, the same
+     * find-inactive-or-append every other array here uses. */
+    for (i = 0; i < gs->ship_count; i++)
+        if (!gs->ships[i].active) { slot = i; break; }
+    if (slot < 0) {
+        if (gs->ship_count >= MAX_SHIPS) return -1;
+        slot = gs->ship_count++;
+    }
+
+    memset(&gs->ships[slot], 0, sizeof(Ship));
+    gs->ships[slot].active      = 1;
+    gs->ships[slot].at_island   = gs->current_island;
+    gs->ships[slot].from_island = gs->current_island;
+    gs->ships[slot].to_island   = gs->current_island;
+
+    stockpile_add(&isl->stockpile, RES_GOLD, -SHIP_BUILD_COST_GOLD);
+
+    SDL_Log("Ship %d launched at %s", slot, isl->name);
+    return slot;
+}
+
+/* ---- game_ship_transfer ----------------------------------- */
+void game_ship_transfer(GameState *gs, int ship_idx, ResourceType res, int qty)
+{
+    Island *isl;
+    Ship   *sh;
+
+    if (ship_idx < 0 || ship_idx >= gs->ship_count) return;
+    sh = &gs->ships[ship_idx];
+    if (!sh->active) return;
+
+    /* Only ever moves goods across a dock, never across open water. */
+    if (sh->at_island != gs->current_island) return;
+    isl = cur(gs);
+
+    if (qty > 0) {                    /* island -> ship */
+        /* Gold is exempt from the hold limit, exactly as it is exempt
+         * from stockpile capacity (resource.h): it is currency, not
+         * bulk cargo. Without this a ship could never carry the
+         * COLONY_FOUNDING_GOLD needed to found a colony, since the
+         * grant is many times a single resource's hold capacity. */
+        if (res != RES_GOLD) {
+            int space = SHIP_CARGO_CAPACITY - sh->cargo[res];
+            if (qty > space) qty = space;
+        }
+        if (qty > isl->stockpile.amount[res]) qty = isl->stockpile.amount[res];
+        if (qty <= 0) return;
+
+        stockpile_add(&isl->stockpile, res, -qty);
+        sh->cargo[res] += qty;
+    } else if (qty < 0) {             /* ship -> island */
+        int want = -qty;
+        if (want > sh->cargo[res]) want = sh->cargo[res];
+        if (want <= 0) return;
+
+        /* stockpile_add() clamps non-Gold to capacity, which would
+         * silently destroy the overflow, so only move what fits. */
+        if (res != RES_GOLD) {
+            int headroom = isl->stockpile.capacity - isl->stockpile.amount[res];
+            if (headroom < 0) headroom = 0;
+            if (want > headroom) want = headroom;
+            if (want <= 0) return;
+        }
+
+        sh->cargo[res] -= want;
+        stockpile_add(&isl->stockpile, res, want);
+    }
+}
+
+/* ---- game_colonise ---------------------------------------- */
+int game_colonise(GameState *gs, int ship_idx, int island_idx)
+{
+    Ship   *sh;
+    Island *isl;
+
+    if (ship_idx < 0 || ship_idx >= gs->ship_count) return 0;
+    if (island_idx < 0 || island_idx >= MAX_ISLANDS) return 0;
+
+    sh  = &gs->ships[ship_idx];
+    isl = &gs->islands[island_idx];
+
+    if (!sh->active) return 0;
+    if (sh->at_island != island_idx) return 0;     /* must be there   */
+    if (isl->settled) return 0;                    /* already ours    */
+    if (sh->cargo[RES_GOLD] < COLONY_FOUNDING_GOLD) return 0;
+
+    /* The grant physically leaves the hold and becomes the colony's
+     * treasury — without it the new island could not pay for so much
+     * as a road, since every cost is denominated in its own Gold. */
+    sh->cargo[RES_GOLD] -= COLONY_FOUNDING_GOLD;
+
+    stockpile_init(&isl->stockpile);
+    stockpile_add(&isl->stockpile, RES_GOLD, COLONY_FOUNDING_GOLD);
+    isl->settled = 1;
+    camera_init(&isl->camera, SCREEN_W, SCREEN_H, MAP_COLS, MAP_ROWS);
+
+    SDL_Log("Colony founded on %s with %d Gold", isl->name, COLONY_FOUNDING_GOLD);
+    return 1;
 }

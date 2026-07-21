@@ -125,6 +125,15 @@ const BuildingDef BUILDING_DEFS[BUILDING_TYPE_COUNT] = {
         { [RES_WOOD] = 20, [RES_GOLD] = 150 },
         1
     },
+    /* Colonisation: a Shipyard has no production of its own — like the
+     * Marketplace it is a gateway you click, here to lay down a ship.
+     * PLACE_NEEDS_COAST for the obvious reason. */
+    {
+        "Shipyard",     2, 2, PLACE_NEEDS_COAST,    130, 120, 160,
+        RES_COUNT,      0,   { RES_COUNT, RES_COUNT }, { 0, 0 },  0.0f,
+        { [RES_WOOD] = 40, [RES_GOLD] = 250 },
+        1
+    },
     /* Population tiers, Phase 1: Worker's House is reached only by
      * upgrading a placed BUILDING_HOUSE (game_upgrade_house, game.c),
      * never placed directly — hud_placeable = 0 keeps it off the HUD

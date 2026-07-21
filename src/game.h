@@ -27,6 +27,7 @@
 #include "population.h"
 #include "agent.h"
 #include "island.h"
+#include "ship.h"
 
 /* Gold a new game's starting island begins with. */
 #define STARTING_GOLD 1000
@@ -114,6 +115,23 @@ typedef struct {
      * game_set_current_island() -- clicking an island in it switches
      * the view and keeps the map open, which is the whole point. */
     int world_open;
+
+    /* Ships are world-scoped, not per-island: one in transit belongs
+     * to neither end of its voyage (see ship.h). */
+    Ship ships[MAX_SHIPS];
+    int  ship_count;
+
+    /* Which ship the world overlay has selected, or -1. Selecting a
+     * ship then clicking an island is how a voyage is ordered —
+     * the same select-then-click grammar as the HUD's
+     * pick-a-building-then-click-a-tile. */
+    int  world_selected_ship;
+
+    /* Ship-build confirmation, opened by clicking a connected
+     * Shipyard with nothing selected. Mirrors the other confirm
+     * popups; the idx is current-island-relative like the rest. */
+    int  ship_build_open;
+    int  ship_build_idx;
 } GameState;
 
 /* The island currently being viewed — the one every placement, UI
@@ -232,5 +250,27 @@ void game_demolish_building(GameState *gs, int idx);
  * different) type. No-op if idx is out of range, inactive, not a
  * BUILDING_HOUSE, or Gold is insufficient. */
 void game_upgrade_house(GameState *gs, int idx);
+
+/* Gold cost of laying down a new ship at a Shipyard. */
+#define SHIP_BUILD_COST_GOLD 350
+
+/* Builds a ship, docked at the current island, paid for out of that
+ * island's stockpile. Returns the new ship's index, or -1 if the
+ * fleet is full or the island cannot afford it. */
+int game_build_ship(GameState *gs);
+
+/* Move `qty` units of `res` between the current island's stockpile
+ * and ship `ship_idx`'s hold. Positive qty loads onto the ship,
+ * negative unloads. Clamped by what is actually present, by the
+ * hold's per-resource capacity, and by the receiving stockpile's
+ * capacity. No-op unless the ship is docked at the current island. */
+void game_ship_transfer(GameState *gs, int ship_idx, ResourceType res, int qty);
+
+/* Found a colony on `island_idx` using ship `ship_idx`, which must be
+ * docked there and carrying at least COLONY_FOUNDING_GOLD. The Gold
+ * leaves the hold and becomes the new island's starting treasury;
+ * the island becomes settled, and therefore simulated and buildable.
+ * Returns 1 on success. */
+int game_colonise(GameState *gs, int ship_idx, int island_idx);
 
 #endif /* GAME_H */

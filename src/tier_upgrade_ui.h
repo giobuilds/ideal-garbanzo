@@ -35,10 +35,15 @@ typedef enum {
     TU_HIT_CANCEL = 2
 } TierUpgradeHit;
 
-/* Draw the popup. `gold_cost` is shown in the confirmation message;
- * `can_afford` greys out/tints the confirm button when Gold on hand
- * is insufficient; mouse_x/y highlight the hovered button. */
+/* Draw the popup. `title` and `body` let the same two-button
+ * spend-Gold-to-confirm shape serve more than one action (the tier
+ * upgrade and the Shipyard's build-a-ship prompt) without a second
+ * near-identical *_ui file — and, more to the point, without either
+ * one showing the other's wording. `gold_cost` is appended to the
+ * body; `can_afford` greys the confirm button; mouse_x/y highlight
+ * the hovered button. */
 void tier_upgrade_ui_draw(SDL_Renderer *renderer, int screen_w, int screen_h,
+                         const char *title, const char *body,
                          int gold_cost, int can_afford,
                          int mouse_x, int mouse_y);
 

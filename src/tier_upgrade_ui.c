@@ -34,6 +34,7 @@ static int point_in(SDL_FRect r, int x, int y)
 }
 
 void tier_upgrade_ui_draw(SDL_Renderer *renderer, int screen_w, int screen_h,
+                         const char *title, const char *body,
                          int gold_cost, int can_afford,
                          int mouse_x, int mouse_y)
 {
@@ -62,13 +63,12 @@ void tier_upgrade_ui_draw(SDL_Renderer *renderer, int screen_w, int screen_h,
                    panel.x + panel.w, panel.y + (float)TU_TITLE_H);
     {
         SDL_Color title_col = { 140, 220, 150, 255 };
-        font_draw_text(renderer, FONT_NORMAL, "Upgrade to Worker's House?",
+        font_draw_text(renderer, FONT_NORMAL, title,
                        (int)(panel.x + 12.0f), (int)(panel.y + 8.0f), title_col);
     }
 
     /* --- Message --------------------------------------------- */
-    SDL_snprintf(msg, sizeof(msg), "Cost: %d Gold. Workers also need Beer.",
-                gold_cost);
+    SDL_snprintf(msg, sizeof(msg), "%s  (%d Gold)", body, gold_cost);
     {
         SDL_Color msg_col = { 220, 200, 160, 255 };
         font_draw_text(renderer, FONT_NORMAL, msg,
@@ -99,7 +99,7 @@ void tier_upgrade_ui_draw(SDL_Renderer *renderer, int screen_w, int screen_h,
             !can_afford ? 85 : (ok_hovr ? 210 : 160),
             !can_afford ? 75 : (ok_hovr ? 130 : 95), 255);
         SDL_RenderRect(renderer, &ok_r);
-        font_draw_text(renderer, FONT_NORMAL, "Upgrade",
+        font_draw_text(renderer, FONT_NORMAL, "Confirm",
                        (int)(ok_r.x + 12.0f), (int)(ok_r.y + 8.0f), ok_col);
 
         SDL_SetRenderDrawColor(renderer,
