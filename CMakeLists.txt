@@ -98,5 +98,17 @@ endif()
 target_link_libraries(saltmarch PRIVATE
     SDL3::SDL3
     SDL3_ttf::SDL3_ttf
-    m
 )
+
+# The math library is a separate link target on Unix (-lm) but does not
+# exist on MSVC, where the math functions live in the C runtime -- naming
+# it unconditionally fails the Windows link with
+# "LNK1104: cannot open file 'm.lib'".
+#
+# find_library rather than if(UNIX): it asks whether libm exists instead
+# of predicting which platforms have one, so this stays correct on
+# platforms nobody here has tried.
+find_library(MATH_LIBRARY m)
+if(MATH_LIBRARY)
+    target_link_libraries(saltmarch PRIVATE ${MATH_LIBRARY})
+endif()
