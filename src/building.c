@@ -42,7 +42,7 @@
  */
 
 #include "building.h"
-#include <string.h>   /* strncpy  */
+#include <stdio.h>    /* snprintf */
 #include <stddef.h>   /* NULL     */
 
 /* =========================================================
@@ -193,6 +193,25 @@ static int footprint_has_adjacent(const Map *map,
     return 0;
 }
 
+/* Report why placement failed, if the caller asked for a reason.
+ *
+ * Uses snprintf rather than strncpy deliberately. strncpy does NOT
+ * null-terminate when the source is at least as long as the buffer, so
+ * "Needs hop-fertile soil" into a 16-byte buffer would leave an
+ * unterminated string for the caller to read off the end of. snprintf
+ * always terminates, and is not deprecated by MSVC the way strncpy is,
+ * so this fixes a latent bug and a portability warning at once.
+ *
+ * The bug is currently dormant only because every caller passes
+ * (NULL, 0) -- the reason text has never been displayed. It stops being
+ * dormant the moment anything wires it into a tooltip. */
+static void set_reason(char *reason, size_t reason_len, const char *msg)
+{
+    if (reason && reason_len > 0) {
+        snprintf(reason, reason_len, "%s", msg);
+    }
+}
+
 /* =========================================================
  * building_can_place
  * ========================================================= */
@@ -208,7 +227,7 @@ int building_can_place(const Map *map,
     if (row < 0 || col < 0 ||
         row + def->tile_h > map->rows ||
         col + def->tile_w > map->cols) {
-        if (reason) strncpy(reason, "Out of bounds", reason_len);
+        set_reason(reason, reason_len, "Out of bounds");
         return 0;
     }
 
@@ -218,14 +237,14 @@ int building_can_place(const Map *map,
             const Tile *t = map_get_tile((Map *)map, r, c);
 
             if (!t || !t->buildable) {
-                if (reason) strncpy(reason, "Tile not buildable", reason_len);
+                set_reason(reason, reason_len, "Tile not buildable");
                 return 0;
             }
 
             /* Fertility check for farms */
             if (def->placement_flags & PLACE_NEEDS_FERTILE) {
                 if (t->fertility == FERTILE_NONE) {
-                    if (reason) strncpy(reason, "Soil not fertile", reason_len);
+                    set_reason(reason, reason_len, "Soil not fertile");
                     return 0;
                 }
             }
@@ -235,7 +254,7 @@ int building_can_place(const Map *map,
              * so Farm's existing (loose) check is untouched. */
             if (def->placement_flags & PLACE_NEEDS_HOP_FERTILE) {
                 if (!(t->fertility & FERTILE_HOP)) {
-                    if (reason) strncpy(reason, "Needs hop-fertile soil", reason_len);
+                    set_reason(reason, reason_len, "Needs hop-fertile soil");
                     return 0;
                 }
             }
@@ -251,7 +270,7 @@ int building_can_place(const Map *map,
         if (!footprint_has_adjacent(map, row, col,
                                     def->tile_w, def->tile_h,
                                     TILE_WATER)) {
-            if (reason) strncpy(reason, "Needs water nearby", reason_len);
+            set_reason(reason, reason_len, "Needs water nearby");
             return 0;
         }
     }
@@ -260,7 +279,7 @@ int building_can_place(const Map *map,
         if (!footprint_has_adjacent(map, row, col,
                                     def->tile_w, def->tile_h,
                                     TILE_FOREST)) {
-            if (reason) strncpy(reason, "Needs forest nearby", reason_len);
+            set_reason(reason, reason_len, "Needs forest nearby");
             return 0;
         }
     }
