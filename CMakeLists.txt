@@ -1,4 +1,5 @@
-cmake_minimum_required(VERSION 3.20)
+# 3.21 for TARGET_RUNTIME_DLLS, used by the Windows DLL copy below.
+cmake_minimum_required(VERSION 3.21)
 project(saltmarch C)
 
 set(CMAKE_C_STANDARD 99)
@@ -73,6 +74,26 @@ add_custom_command(TARGET saltmarch POST_BUILD
             $<TARGET_FILE_DIR:saltmarch>/assets
     COMMENT "Staging assets/ beside the executable"
 )
+
+# Windows has no rpath and no system library directory: an .exe finds its
+# DLLs next to itself or not at all. Without this, saltmarch.exe builds
+# perfectly and then dies on launch with "SDL3.dll was not found" -- the
+# same shape of failure as the missing font, where the build is green and
+# the program is unusable.
+#
+# TARGET_RUNTIME_DLLS resolves the imported SDL3::SDL3 / SDL3_ttf::SDL3_ttf
+# targets to their actual .dll paths, so this keeps working if the SDL
+# version or install location changes. The genex is empty on non-DLL
+# platforms, hence the if(WIN32) guard -- and copy_if_different tolerates
+# an empty argument list on the first build.
+if(WIN32)
+    add_custom_command(TARGET saltmarch POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                $<TARGET_RUNTIME_DLLS:saltmarch> $<TARGET_FILE_DIR:saltmarch>
+        COMMAND_EXPAND_LISTS
+        COMMENT "Staging SDL runtime DLLs beside the executable"
+    )
+endif()
 
 target_link_libraries(saltmarch PRIVATE
     SDL3::SDL3
