@@ -113,6 +113,14 @@ static void game_reset_world(GameState *gs, uint32_t seed)
 
     stockpile_add(&cur(gs)->stockpile, RES_GOLD, STARTING_GOLD);
 
+    /* A fresh world is a fresh history: discard any previous command
+     * log and reset the world clock. The starting state above is a
+     * deterministic function of the seed, so replay reconstructs it by
+     * re-running this function, then replaying the (now empty) log.
+     * The allocation itself is kept for reuse. */
+    gs->cmd_count   = 0;
+    gs->sim_tick_no = 0;
+
     /* No starter houses: the player places their own first House and
      * grows population from there. */
     game_set_current_island(gs, 0);
@@ -128,6 +136,14 @@ GameState *game_init(void)
     gs->last_tick  = SDL_GetTicksNS();
     gs->delta_time = 0.0f;
 
+    /* The command log starts empty. Zero it before anything can push,
+     * since malloc does not, and game_reset_world resets the counters
+     * but relies on the pointer/cap being valid. */
+    gs->cmd_log     = NULL;
+    gs->cmd_count   = 0;
+    gs->cmd_cap     = 0;
+    gs->sim_tick_no = 0;
+
     game_reset_world(gs, (uint32_t)SDL_GetTicksNS());
 
     return gs;
@@ -136,6 +152,8 @@ GameState *game_init(void)
 /* ---- game_free ----------------------------------------- */
 void game_free(GameState *gs)
 {
+    if (!gs) return;
+    command_log_free(gs);
     free(gs);
 }
 
@@ -474,9 +492,10 @@ void game_update(GameState *gs, SDL_Renderer *renderer)
  * deduction beforehand — this only ever runs once placement is
  * already decided. Returns the new building's index, or -1 on
  * failure (full array, invalid tile, or an unsettled island). */
-static int commit_placement(GameState *gs, BuildingType type, int row, int col)
+static int commit_placement(GameState *gs, int island, BuildingType type,
+                            int row, int col)
 {
-    Island *isl = cur(gs);
+    Island *isl = &gs->islands[island];
     int     idx;
 
     /* Gated here as well as in the UI: an unsettled island must be
@@ -508,9 +527,9 @@ static int commit_placement(GameState *gs, BuildingType type, int row, int col)
  * same function for consistency — one tile placed the same way
  * whether it came from a click or a drag. Roads are free, so there's
  * no resources-vs-gold choice to offer anyway. */
-int game_try_place_road(GameState *gs, int row, int col)
+static int sim_place_road(GameState *gs, int island, int row, int col)
 {
-    Island            *isl = cur(gs);
+    Island            *isl = &gs->islands[island];
     const BuildingDef *def = &BUILDING_DEFS[BUILDING_ROAD];
 
     if (!isl->settled) return 0;
@@ -519,46 +538,75 @@ int game_try_place_road(GameState *gs, int row, int col)
     if (!building_can_afford(&isl->stockpile, BUILDING_ROAD))
         return 0;
 
-    if (commit_placement(gs, BUILDING_ROAD, row, col) < 0)
+    if (commit_placement(gs, island, BUILDING_ROAD, row, col) < 0)
         return 0;
 
     stockpile_add(&isl->stockpile, RES_GOLD, -def->cost[RES_GOLD]);
     return 1;
 }
 
-/* ---- game_place_building_confirmed ------------------------- */
-void game_place_building_confirmed(GameState *gs, int pay_with_gold)
+int game_try_place_road(GameState *gs, int row, int col)
 {
-    Island             *isl  = cur(gs);
-    BuildingType        type = gs->selected_building;
-    const BuildingDef  *def;
-    int                 i;
+    Command c = {0};
+    c.kind = CMD_PLACE_ROAD;
+    c.a    = gs->current_island;
+    c.b    = row;
+    c.c    = col;
+    return command_submit(gs, &c);
+}
 
-    if (type == BUILDING_NONE) return;
-    if (!isl->settled) return;
-    if (gs->build_confirm_row < 0) return;
+/* ---- sim_place_building / game_place_building_confirmed ----
+ * The sim body validates everything itself (type range, settled,
+ * affordability) so it is safe to call from a replayed log where the
+ * accompanying GameState fields no longer describe the moment of
+ * submission. */
+static int sim_place_building(GameState *gs, int island, int row, int col,
+                              BuildingType type, int pay_with_gold)
+{
+    Island            *isl = &gs->islands[island];
+    const BuildingDef *def;
+    int                i;
+
+    if (type <= BUILDING_NONE || type >= BUILDING_TYPE_COUNT) return 0;
+    if (!isl->settled) return 0;
+    if (row < 0) return 0;
     def = &BUILDING_DEFS[type];
 
     if (pay_with_gold) {
         int gold_cost = building_gold_equivalent_cost(type);
-        if (isl->stockpile.amount[RES_GOLD] < gold_cost) return;
+        if (isl->stockpile.amount[RES_GOLD] < gold_cost) return 0;
 
-        if (commit_placement(gs, type, gs->build_confirm_row,
-                             gs->build_confirm_col) < 0)
-            return;
+        if (commit_placement(gs, island, type, row, col) < 0)
+            return 0;
 
         stockpile_add(&isl->stockpile, RES_GOLD, -gold_cost);
     } else {
-        if (!building_can_afford(&isl->stockpile, type)) return;
+        if (!building_can_afford(&isl->stockpile, type)) return 0;
 
-        if (commit_placement(gs, type, gs->build_confirm_row,
-                             gs->build_confirm_col) < 0)
-            return;
+        if (commit_placement(gs, island, type, row, col) < 0)
+            return 0;
 
         for (i = 0; i < RES_COUNT; i++)
             if (def->cost[i] > 0)
                 stockpile_add(&isl->stockpile, (ResourceType)i, -def->cost[i]);
     }
+    return 1;
+}
+
+void game_place_building_confirmed(GameState *gs, int pay_with_gold)
+{
+    Command c = {0};
+
+    if (gs->selected_building == BUILDING_NONE) return;
+    if (gs->build_confirm_row < 0) return;
+
+    c.kind = CMD_PLACE_BUILDING;
+    c.a    = gs->current_island;
+    c.b    = gs->build_confirm_row;
+    c.c    = gs->build_confirm_col;
+    /* Pack type and the payment bit into one slot — see command.h. */
+    c.d    = (int32_t)((int)gs->selected_building * 2 + (pay_with_gold ? 1 : 0));
+    command_submit(gs, &c);
 }
 
 /* ---- game_find_building_at -------------------------------
@@ -591,25 +639,39 @@ int game_find_building_at(const GameState *gs, int row, int col)
  * independently connected to the world market at the same fixed
  * prices, which is also what guarantees a new colony can buy in goods
  * its own terrain can't produce. */
-void game_sell_resource(GameState *gs, ResourceType res, int qty)
+static int sim_sell(GameState *gs, int island, ResourceType res, int qty)
 {
-    Island *isl = cur(gs);
+    Island *isl = &gs->islands[island];
 
-    if (res == RES_GOLD) return;
+    if (res < 0 || res >= RES_COUNT || res == RES_GOLD) return 0;
     if (qty > isl->stockpile.amount[res]) qty = isl->stockpile.amount[res];
-    if (qty <= 0) return;
+    if (qty <= 0) return 0;
 
     stockpile_add(&isl->stockpile, res, -qty);
     stockpile_add(&isl->stockpile, RES_GOLD, qty * SELL_PRICE[res]);
+    return 1;
 }
 
-/* ---- game_buy_resource --------------------------------------- */
-void game_buy_resource(GameState *gs, ResourceType res, int qty)
+void game_sell_resource(GameState *gs, ResourceType res, int qty)
 {
-    Island *isl = cur(gs);
+    Command c = {0};
+    c.kind = CMD_SELL_RESOURCE;
+    c.a    = gs->current_island;
+    c.b    = (int32_t)res;
+    c.c    = qty;
+    command_submit(gs, &c);
+}
+
+/* ---- sim_buy / game_buy_resource ----------------------------
+ * qty < 0 means "buy as much as storage headroom and Gold allow"; that
+ * is resolved here against the live stockpile, so it stays correct when
+ * replayed. */
+static int sim_buy(GameState *gs, int island, ResourceType res, int qty)
+{
+    Island *isl = &gs->islands[island];
     int     headroom, max_affordable;
 
-    if (res == RES_GOLD) return;
+    if (res < 0 || res >= RES_COUNT || res == RES_GOLD) return 0;
 
     headroom = isl->stockpile.capacity - isl->stockpile.amount[res];
     if (headroom < 0) headroom = 0;
@@ -622,21 +684,32 @@ void game_buy_resource(GameState *gs, ResourceType res, int qty)
         qty = (headroom < max_affordable) ? headroom : max_affordable;
     if (qty > headroom)        qty = headroom;
     if (qty > max_affordable)  qty = max_affordable;
-    if (qty <= 0) return;
+    if (qty <= 0) return 0;
 
     stockpile_add(&isl->stockpile, RES_GOLD, -(qty * BUY_PRICE[res]));
     stockpile_add(&isl->stockpile, res, qty);
+    return 1;
 }
 
-/* ---- game_demolish_building --------------------------------- */
-void game_demolish_building(GameState *gs, int idx)
+void game_buy_resource(GameState *gs, ResourceType res, int qty)
 {
-    Island      *isl = cur(gs);
+    Command c = {0};
+    c.kind = CMD_BUY_RESOURCE;
+    c.a    = gs->current_island;
+    c.b    = (int32_t)res;
+    c.c    = qty;
+    command_submit(gs, &c);
+}
+
+/* ---- sim_demolish / game_demolish_building ------------------- */
+static int sim_demolish(GameState *gs, int island, int idx)
+{
+    Island      *isl = &gs->islands[island];
     BuildingType type;
     int          i;
 
-    if (idx < 0 || idx >= isl->building_count) return;
-    if (!isl->buildings[idx].active) return;
+    if (idx < 0 || idx >= isl->building_count) return 0;
+    if (!isl->buildings[idx].active) return 0;
 
     type = isl->buildings[idx].type;
 
@@ -675,33 +748,54 @@ void game_demolish_building(GameState *gs, int idx)
 
     if (type == BUILDING_WAREHOUSE)
         island_recompute_storage_capacity(isl);
+    return 1;
 }
 
-/* ---- game_upgrade_house -------------------------------------- */
-void game_upgrade_house(GameState *gs, int idx)
+void game_demolish_building(GameState *gs, int idx)
 {
-    Island *isl = cur(gs);
+    Command c = {0};
+    c.kind = CMD_DEMOLISH;
+    c.a    = gs->current_island;
+    c.b    = idx;
+    command_submit(gs, &c);
+}
 
-    if (idx < 0 || idx >= isl->building_count) return;
-    if (!isl->buildings[idx].active) return;
-    if (isl->buildings[idx].type != BUILDING_HOUSE) return;
-    if (isl->stockpile.amount[RES_GOLD] < TIER_UPGRADE_COST_GOLD) return;
+/* ---- sim_upgrade_house / game_upgrade_house ------------------ */
+static int sim_upgrade_house(GameState *gs, int island, int idx)
+{
+    Island *isl = &gs->islands[island];
+
+    if (idx < 0 || idx >= isl->building_count) return 0;
+    if (!isl->buildings[idx].active) return 0;
+    if (isl->buildings[idx].type != BUILDING_HOUSE) return 0;
+    if (isl->stockpile.amount[RES_GOLD] < TIER_UPGRADE_COST_GOLD) return 0;
 
     stockpile_add(&isl->stockpile, RES_GOLD, -TIER_UPGRADE_COST_GOLD);
     isl->buildings[idx].type = BUILDING_HOUSE_WORKER;
+    return 1;
 }
 
-/* ---- game_build_ship ------------------------------------- */
-int game_build_ship(GameState *gs)
+void game_upgrade_house(GameState *gs, int idx)
 {
-    Island *isl = cur(gs);
+    Command c = {0};
+    c.kind = CMD_UPGRADE_HOUSE;
+    c.a    = gs->current_island;
+    c.b    = idx;
+    command_submit(gs, &c);
+}
+
+/* ---- sim_build_ship / game_build_ship -----------------------
+ * Returns the new ship's slot index, or -1 on failure. Slot choice
+ * (reuse-first-inactive, else append) is a deterministic function of
+ * the ship array, so a replayed log lands the ship in the same slot. */
+static int sim_build_ship(GameState *gs, int island)
+{
+    Island *isl = &gs->islands[island];
     int     i, slot = -1;
 
     if (!isl->settled) return -1;
     if (isl->stockpile.amount[RES_GOLD] < SHIP_BUILD_COST_GOLD) return -1;
 
-    /* Reuse a scuttled slot before growing the fleet, the same
-     * find-inactive-or-append every other array here uses. */
     for (i = 0; i < gs->ship_count; i++)
         if (!gs->ships[i].active) { slot = i; break; }
     if (slot < 0) {
@@ -711,9 +805,9 @@ int game_build_ship(GameState *gs)
 
     memset(&gs->ships[slot], 0, sizeof(Ship));
     gs->ships[slot].active      = 1;
-    gs->ships[slot].at_island   = gs->current_island;
-    gs->ships[slot].from_island = gs->current_island;
-    gs->ships[slot].to_island   = gs->current_island;
+    gs->ships[slot].at_island   = island;
+    gs->ships[slot].from_island = island;
+    gs->ships[slot].to_island   = island;
 
     stockpile_add(&isl->stockpile, RES_GOLD, -SHIP_BUILD_COST_GOLD);
 
@@ -721,26 +815,78 @@ int game_build_ship(GameState *gs)
     return slot;
 }
 
-/* ---- game_ship_transfer -----------------------------------
- * The manual Load/Unload path: adds the "must be docked at the island
- * you are currently looking at" rule, then defers the actual clamping
- * to ship_transfer_at() so it cannot disagree with what routes do. */
-void game_ship_transfer(GameState *gs, int ship_idx, ResourceType res, int qty)
+int game_build_ship(GameState *gs)
+{
+    Command c = {0};
+    c.kind = CMD_BUILD_SHIP;
+    c.a    = gs->current_island;
+    c.b    = -1;   /* shipyard index: not used by the sim yet */
+    return command_submit(gs, &c);
+}
+
+/* ---- sim_ship_transfer / game_ship_transfer -----------------
+ * Moves goods across a dock only, never across open water: the ship
+ * must be docked at `island`. Clamping is deferred to ship_transfer_at
+ * so the manual path cannot disagree with what trade routes do. */
+static int sim_ship_transfer(GameState *gs, int ship_idx, ResourceType res,
+                             int qty, int island)
 {
     Ship *sh;
 
-    if (ship_idx < 0 || ship_idx >= gs->ship_count) return;
+    if (ship_idx < 0 || ship_idx >= gs->ship_count) return 0;
+    if (res < 0 || res >= RES_COUNT) return 0;
     sh = &gs->ships[ship_idx];
-    if (!sh->active) return;
+    if (!sh->active) return 0;
+    if (sh->at_island != island) return 0;
 
-    /* Only ever moves goods across a dock, never across open water. */
-    if (sh->at_island != gs->current_island) return;
-
-    ship_transfer_at(sh, cur(gs), res, qty);
+    ship_transfer_at(sh, &gs->islands[island], res, qty);
+    return 1;
 }
 
-/* ---- game_colonise ---------------------------------------- */
-int game_colonise(GameState *gs, int ship_idx, int island_idx)
+void game_ship_transfer(GameState *gs, int ship_idx, ResourceType res, int qty)
+{
+    Command c = {0};
+    c.kind = CMD_SHIP_TRANSFER;
+    c.a    = ship_idx;
+    c.b    = (int32_t)res;
+    c.c    = qty;
+    c.d    = gs->current_island;   /* the dock this transfer happens at */
+    command_submit(gs, &c);
+}
+
+/* ---- sim_ship_depart / game_ship_depart ---------------------
+ * Was an inline mutation in main.c's world overlay; now a command like
+ * every other. The ship must be docked somewhere other than its
+ * destination. */
+static int sim_ship_depart(GameState *gs, int ship_idx, int dest)
+{
+    Ship *sh;
+
+    if (ship_idx < 0 || ship_idx >= gs->ship_count) return 0;
+    if (dest < 0 || dest >= MAX_ISLANDS) return 0;
+    sh = &gs->ships[ship_idx];
+    if (!sh->active) return 0;
+    if (sh->at_island < 0) return 0;         /* already at sea       */
+    if (sh->at_island == dest) return 0;     /* nowhere to go        */
+
+    sh->from_island = sh->at_island;
+    sh->to_island   = dest;
+    sh->at_island   = -1;                    /* now at sea           */
+    sh->progress    = 0.0f;
+    return 1;
+}
+
+int game_ship_depart(GameState *gs, int ship_idx, int dest_island)
+{
+    Command c = {0};
+    c.kind = CMD_SHIP_DEPART;
+    c.a    = ship_idx;
+    c.b    = dest_island;
+    return command_submit(gs, &c);
+}
+
+/* ---- sim_colonise / game_colonise ---------------------------- */
+static int sim_colonise(GameState *gs, int ship_idx, int island_idx)
 {
     Ship   *sh;
     Island *isl;
@@ -768,4 +914,59 @@ int game_colonise(GameState *gs, int ship_idx, int island_idx)
 
     SDL_Log("Colony founded on %s with %d Gold", isl->name, COLONY_FOUNDING_GOLD);
     return 1;
+}
+
+int game_colonise(GameState *gs, int ship_idx, int island_idx)
+{
+    Command c = {0};
+    c.kind = CMD_COLONISE;
+    c.a    = ship_idx;
+    c.b    = island_idx;
+    return command_submit(gs, &c);
+}
+
+/* ---- sim_apply ----------------------------------------------
+ * The single dispatch from a Command to the mutation that carries it
+ * out. The ONLY caller of the sim_* bodies above, and the only place
+ * world state changes. Never appends to the log (command_submit does
+ * that, and replay calls sim_apply directly). Returns 1 if the command
+ * mutated state, 0 if it was rejected — rejection is deterministic and
+ * not an error. Payload decoding mirrors command.h. */
+int sim_apply(GameState *gs, const Command *c)
+{
+    switch (c->kind) {
+    case CMD_PLACE_BUILDING: {
+        BuildingType type = (BuildingType)(c->d / 2);
+        int          pay  = c->d & 1;
+        if (c->a < 0 || c->a >= MAX_ISLANDS) return 0;
+        return sim_place_building(gs, c->a, c->b, c->c, type, pay);
+    }
+    case CMD_PLACE_ROAD:
+        if (c->a < 0 || c->a >= MAX_ISLANDS) return 0;
+        return sim_place_road(gs, c->a, c->b, c->c);
+    case CMD_DEMOLISH:
+        if (c->a < 0 || c->a >= MAX_ISLANDS) return 0;
+        return sim_demolish(gs, c->a, c->b);
+    case CMD_SELL_RESOURCE:
+        if (c->a < 0 || c->a >= MAX_ISLANDS) return 0;
+        return sim_sell(gs, c->a, (ResourceType)c->b, c->c);
+    case CMD_BUY_RESOURCE:
+        if (c->a < 0 || c->a >= MAX_ISLANDS) return 0;
+        return sim_buy(gs, c->a, (ResourceType)c->b, c->c);
+    case CMD_UPGRADE_HOUSE:
+        if (c->a < 0 || c->a >= MAX_ISLANDS) return 0;
+        return sim_upgrade_house(gs, c->a, c->b);
+    case CMD_BUILD_SHIP:
+        if (c->a < 0 || c->a >= MAX_ISLANDS) return 0;
+        return sim_build_ship(gs, c->a) >= 0;
+    case CMD_SHIP_TRANSFER:
+        if (c->d < 0 || c->d >= MAX_ISLANDS) return 0;
+        return sim_ship_transfer(gs, c->a, (ResourceType)c->b, c->c, c->d);
+    case CMD_SHIP_DEPART:
+        return sim_ship_depart(gs, c->a, c->b);
+    case CMD_COLONISE:
+        return sim_colonise(gs, c->a, c->b);
+    default:
+        return 0;
+    }
 }

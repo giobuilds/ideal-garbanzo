@@ -28,6 +28,7 @@
 #include "agent.h"
 #include "island.h"
 #include "ship.h"
+#include "command.h"
 
 /* Gold a new game's starting island begins with. */
 #define STARTING_GOLD 1000
@@ -132,7 +133,39 @@ typedef struct {
      * popups; the idx is current-island-relative like the rest. */
     int  ship_build_open;
     int  ship_build_idx;
+
+    /* ---- The command funnel (MMO_PLAN Phase 1a) -----------
+     * Every world mutation is recorded here as a Command, in the order
+     * it was applied, and re-running the log from the world seed
+     * reproduces the world exactly. cmd_log is a grow-by-doubling heap
+     * array owned by GameState (freed in game_free via
+     * command_log_free). sim_tick_no is the world clock; today it is a
+     * plain frame counter, but Phase 1b makes it the authoritative
+     * fixed-timestep tick number. See command.h. */
+    Command  *cmd_log;
+    int       cmd_count;
+    int       cmd_cap;
+    uint64_t  sim_tick_no;
 } GameState;
+
+/* ---- The command funnel ---------------------------------
+ * command_submit() is the ONE entry point for changing world state: it
+ * stamps the command with the current tick, appends it to the log, and
+ * applies it via sim_apply(). Returns 1 if the command mutated state,
+ * 0 if it was rejected as invalid (a replayed log must reject the same
+ * commands identically each time, so rejection is not an error — it is
+ * part of the deterministic result).
+ *
+ * sim_apply() is the sole dispatcher from a Command to the actual
+ * mutation. It lives in game.c beside the per-kind mutators it calls,
+ * and is the only place those mutators are invoked from. It never
+ * appends to the log itself (so replay can call it directly without
+ * doubling the log). */
+int  command_submit(GameState *gs, const Command *c);
+int  sim_apply(GameState *gs, const Command *c);
+
+/* Free the command log. Called by game_free(); safe on an empty log. */
+void command_log_free(GameState *gs);
 
 /* The island currently being viewed — the one every placement, UI
  * action and *_idx field in GameState refers to. Never NULL:
@@ -272,5 +305,13 @@ void game_ship_transfer(GameState *gs, int ship_idx, ResourceType res, int qty);
  * the island becomes settled, and therefore simulated and buildable.
  * Returns 1 on success. */
 int game_colonise(GameState *gs, int ship_idx, int island_idx);
+
+/* Order ship `ship_idx` to sail from wherever it is docked to
+ * `dest_island`. The ship must be docked (at_island >= 0) at an island
+ * other than the destination. Returns 1 if the voyage was ordered.
+ * This replaces the inline ship-state mutation the world overlay used
+ * to do directly, routing the ship-depart order through the funnel
+ * like every other mutation (MMO_PLAN Phase 1a). */
+int game_ship_depart(GameState *gs, int ship_idx, int dest_island);
 
 #endif /* GAME_H */

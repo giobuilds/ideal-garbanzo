@@ -123,15 +123,11 @@ SDL_AppResult SDL_AppIterate(void *appstate)
                     /* A ship is selected, so an island click is an
                      * order to sail there rather than a view change —
                      * the same select-then-click grammar the HUD uses
-                     * for placing buildings. */
-                    Ship *sh = &gs->ships[gs->world_selected_ship];
-                    if (sh->active && sh->at_island >= 0 &&
-                        sh->at_island != target) {
-                        sh->from_island = sh->at_island;
-                        sh->to_island   = target;
-                        sh->at_island   = -1;     /* now at sea */
-                        sh->progress    = 0.0f;
-                    }
+                     * for placing buildings. Routed through the command
+                     * funnel like every other mutation (Phase 1a); the
+                     * depart's own validation handles "not docked" and
+                     * "already there". */
+                    game_ship_depart(gs, gs->world_selected_ship, target);
                 } else if (target >= 0) {
                     game_set_current_island(gs, target);
                     isl = game_cur_island(gs);   /* the view just moved */
