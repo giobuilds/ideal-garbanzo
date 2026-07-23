@@ -73,18 +73,15 @@ jobs:
           ./build/saltmarch --replay fixture.smlog
 
   macos:
-    name: macOS ${{ matrix.arch }} (Clang)
-    runs-on: ${{ matrix.os }}
+    name: macOS Apple Silicon (Clang)
+    # arm64 only. GitHub retired the Intel (macos-13) hosted runner, so
+    # a job targeting it now sits queued forever with no runner to pick
+    # it up. x86_64 macOS is no longer a free CI target; Apple Silicon
+    # is where the Mac install base has moved anyway. If native Intel
+    # coverage is ever needed again, cross-build here with
+    # -DCMAKE_OSX_ARCHITECTURES=x86_64 and run it under Rosetta.
+    runs-on: macos-14
     timeout-minutes: 20
-
-    strategy:
-      # Let both architectures report independently; one failing tells
-      # us nothing useful about the other.
-      fail-fast: false
-      matrix:
-        include:
-          - { os: macos-13, arch: Intel }        # x86_64 runner
-          - { os: macos-14, arch: Apple Silicon } # arm64 runner
 
     steps:
       - uses: actions/checkout@v5
