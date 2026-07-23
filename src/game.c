@@ -1,6 +1,7 @@
 /*  game.c  --  Game state management  (Phase 5)  */
 
 #include "game.h"
+#include "net.h"      /* Phase 5: the lockstep tick gate */
 #include "render.h"
 #include "building.h"
 #include "resource.h"
@@ -173,6 +174,7 @@ GameState *game_init(void)
     gs->replay_tick        = 0;
 
     gs->local_player_id = 1u;
+    gs->net             = NULL;   /* attached by main.c when hosting/joining */
 
     game_reset_world(gs, (uint32_t)SDL_GetTicksNS());
 
@@ -337,10 +339,9 @@ int game_load(GameState *gs, const char *path)
 
     /* Rebuild tick 0 from the seed (this sets replay_valid = 1), install
      * the logged commands, then replay them up to the saved tick. */
-    game_reset_world(gs, hdr.world_seed);
-
     cmds = (const Command *)(buf + sizeof(hdr));
-    if (!command_log_set(gs, cmds, hdr.cmd_count)) {
+    if (!game_install_world(gs, hdr.world_seed, hdr.sim_tick_no,
+                            cmds, hdr.cmd_count)) {
         SDL_Log("game_load: out of memory installing %d commands",
                 hdr.cmd_count);
         free(buf);
@@ -348,14 +349,28 @@ int game_load(GameState *gs, const char *path)
     }
     free(buf);
 
-    while (gs->sim_tick_no < hdr.sim_tick_no)
-        sim_run_one_tick(gs);
-
     game_set_current_island(gs, hdr.current_island);
 
     SDL_Log("Game loaded from %s (seed %u, replayed to tick %llu, %d commands)",
             path, hdr.world_seed,
             (unsigned long long)gs->sim_tick_no, gs->cmd_count);
+    return 1;
+}
+
+/* ---- game_install_world -----------------------------------
+ * The (seed, log, tick) -> world constructor shared by game_load and
+ * the net layer's join/resync path. See game.h. */
+int game_install_world(GameState *gs, uint32_t seed, uint64_t tick,
+                       const Command *cmds, int n)
+{
+    game_reset_world(gs, seed);
+
+    if (!command_log_set(gs, cmds, n))
+        return 0;
+
+    while (gs->sim_tick_no < tick)
+        sim_run_one_tick(gs);
+
     return 1;
 }
 
@@ -466,6 +481,15 @@ void game_update(GameState *gs, SDL_Renderer *renderer)
     if (gs->sim_acc_ns > SIM_TICK_NS * 8)
         gs->sim_acc_ns = SIM_TICK_NS * 8;
     while (gs->sim_acc_ns >= SIM_TICK_NS) {
+        /* Lockstep gate (Phase 5): a co-op guest may only simulate
+         * ticks the host has authorised — an authorised tick is a
+         * complete tick (every command for it has arrived). When the
+         * gate closes, real time keeps accumulating (clamped above) and
+         * the sim catches up in a burst when authorisation arrives,
+         * staying in step rather than drifting. Hosts and offline play
+         * are never gated. */
+        if (gs->net && !net_tick_allowed(gs->net, gs->sim_tick_no))
+            break;
         sim_run_one_tick(gs);
         gs->sim_acc_ns -= SIM_TICK_NS;
     }

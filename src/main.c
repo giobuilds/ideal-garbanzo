@@ -17,11 +17,19 @@
 #include "ship.h"
 #include "fonts.h"    /* Phase 5 */
 #include "feed.h"     /* MMO Phase 4: shared voyage feed */
+#include "net.h"      /* MMO Phase 5: lockstep co-op */
 
-/* Feed lives here, beside the window — NOT in GameState. It is client
- * chrome: ghosts never enter sim_hash, and the CLI record/replay path
- * never constructs one (see feed.h's cosmetic-boundary note). */
-typedef struct { SDL_Window *w; SDL_Renderer *r; GameState *g; Feed feed; } App;
+/* Feed and NetSession live here, beside the window — NOT in GameState.
+ * They are client chrome: ghosts never enter sim_hash, the net session
+ * is referenced from GameState only as an opaque routing pointer, and
+ * the CLI record/replay path constructs neither. */
+typedef struct {
+    SDL_Window   *w;
+    SDL_Renderer *r;
+    GameState    *g;
+    Feed          feed;
+    NetSession   *net;   /* NULL when playing offline */
+} App;
 
 /* Wall-clock unix milliseconds, for feed timestamps and ghost lerp. */
 static uint64_t wall_unix_ms(void)
@@ -182,8 +190,37 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[])
     app->g = gs;
 
     /* Display name for the shared feed: SALTMARCH_PLAYER, or a default.
-     * Cosmetic identity only — sim player_id stays 0 until Phase 5. */
+     * Cosmetic identity only — the sim's player_id comes from the co-op
+     * session (or defaults to player 1 offline). */
     feed_init(&app->feed, SDL_getenv("SALTMARCH_PLAYER"));
+
+    /* Co-op (Phase 5): --host [port] listens for one guest; --join
+     * host[:port] connects to one. The session lives in App; gs->net is
+     * the routing pointer command_submit and the tick gate consult. */
+    app->net = NULL;
+    {
+        int i;
+        for (i = 1; i < argc; i++) {
+            if (SDL_strcmp(argv[i], "--host") == 0) {
+                uint16_t port = NET_DEFAULT_PORT;
+                if (i + 1 < argc && argv[i + 1][0] != '-')
+                    port = (uint16_t)SDL_strtoul(argv[++i], NULL, 10);
+                app->net = net_host(port);
+            } else if (SDL_strcmp(argv[i], "--join") == 0 && i + 1 < argc) {
+                char     hostbuf[128];
+                char    *colon;
+                uint16_t port = NET_DEFAULT_PORT;
+                SDL_strlcpy(hostbuf, argv[++i], sizeof(hostbuf));
+                colon = SDL_strchr(hostbuf, ':');
+                if (colon) {
+                    *colon = '\0';
+                    port = (uint16_t)SDL_strtoul(colon + 1, NULL, 10);
+                }
+                app->net = net_join(hostbuf, port);
+            }
+        }
+        if (app->net) gs->net = app->net;
+    }
 
     *appstate = app;
 
@@ -215,7 +252,21 @@ SDL_AppResult SDL_AppIterate(void *appstate)
     GameState *gs  = app->g;
     Island    *isl;
 
+    /* Co-op session (Phase 5): drain the socket BEFORE the sim runs so
+     * this frame's ticks see every command and authorisation that has
+     * arrived; a dead session tears down to single-player continuation. */
+    if (app->net) {
+        if (!net_pump(app->net, gs)) {
+            net_close(app->net);
+            app->net = NULL;
+            gs->net  = NULL;
+        }
+    }
+
     game_update(gs, app->r);
+
+    if (app->net)
+        net_after_update(app->net, gs);
 
     /* Shared feed (Phase 4): publish any departures the ticks above
      * just caused, and re-read the inbound feed on its poll interval.
@@ -680,6 +731,13 @@ SDL_AppResult SDL_AppIterate(void *appstate)
         }
     }
 
+    /* Co-op status line, top-left, whenever a session exists. */
+    if (app->net) {
+        SDL_Color net_col = { 160, 210, 250, 255 };
+        font_draw_text(app->r, FONT_SMALL, net_status(app->net),
+                       16, 8, net_col);
+    }
+
     /* F9 determinism result, shown top-centre for a few seconds. */
     if (gs->replay_state != 0 &&
         SDL_GetTicksNS() < gs->replay_show_until_ns) {
@@ -718,5 +776,9 @@ void SDL_AppQuit(void *appstate, SDL_AppResult result)
     App *app = (App *)appstate;
     (void)result;
     fonts_quit();   /* Phase 5: release SDL_ttf resources */
-    if (app) { game_free(app->g); SDL_free(app); }
+    if (app) {
+        if (app->net) net_close(app->net);   /* sends BYE to the peer */
+        game_free(app->g);
+        SDL_free(app);
+    }
 }

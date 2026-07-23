@@ -17,6 +17,7 @@
  */
 
 #include "game.h"
+#include "net.h"     /* Phase 5: route submissions through a session */
 #include <SDL3/SDL.h>
 #include <stdlib.h>
 #include <string.h>
@@ -60,15 +61,27 @@ int command_submit(GameState *gs, const Command *c)
 {
     Command stamped = *c;
 
+    /* In a co-op session the submission is routed through the host's
+     * ordering authority instead of the local log (host: stamp + log +
+     * broadcast; guest: send upstream and wait for it to come back
+     * stamped). Offline, or if the session declines, fall through to
+     * local stamping. */
+    if (gs->net && net_submit_local(gs->net, gs, c))
+        return 1;
+
     /* Stamp for the next tick to run (sim_tick_no) and with the local
      * player's identity (Phase 5: ownership validation reads this).
      * sim_run_one_tick applies it when the world clock reaches that
-     * tick. In co-op the HOST re-stamps a guest's commands from the
-     * connection identity — the payload is never trusted for identity. */
+     * tick. */
     stamped.tick      = gs->sim_tick_no;
     stamped.player_id = gs->local_player_id;
 
     return cmd_log_push(gs, &stamped);
+}
+
+int command_log_append(GameState *gs, const Command *c)
+{
+    return cmd_log_push(gs, c);
 }
 
 int command_log_set(GameState *gs, const Command *cmds, int n)

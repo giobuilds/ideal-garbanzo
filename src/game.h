@@ -176,6 +176,13 @@ typedef struct {
      * by the host at join and keeps it after a disconnect. */
     uint32_t  local_player_id;
 
+    /* The lockstep co-op session, or NULL offline (Phase 5). Client
+     * infrastructure like local_player_id: owned by App (main.c),
+     * referenced here only so command_submit can route submissions and
+     * the tick loop can respect the guest's authorisation horizon.
+     * Never hashed, never saved. */
+    struct NetSession *net;
+
     /* World seed the whole archipelago is generated from. Stored so the
      * F9 self-check (and, in Phase 1d, load) can rebuild the tick-0
      * world and replay the log against it. */
@@ -246,6 +253,19 @@ int game_verify_determinism(GameState *gs);
  * install a log read from disk. Returns 1 on success, 0 on OOM (the log
  * is left unchanged on failure). */
 int  command_log_set(GameState *gs, const Command *cmds, int n);
+
+/* Append one ALREADY-STAMPED command to the log without applying it —
+ * the guest's half of lockstep: authoritative commands arrive from the
+ * host stamped for a future tick, and sim_run_one_tick applies them
+ * when the clock gets there. Returns 1 on success, 0 on OOM. */
+int  command_log_append(GameState *gs, const Command *c);
+
+/* Rebuild the world as (seed, log, tick) — regenerate from the seed,
+ * install the log, replay to `tick`. Exactly what game_load does after
+ * parsing its file; public so the net layer can install a world
+ * received over the wire (join and resync). Marks replay_valid. */
+int  game_install_world(GameState *gs, uint32_t seed, uint64_t tick,
+                        const Command *cmds, int n);
 
 /* Free the command log. Called by game_free(); safe on an empty log. */
 void command_log_free(GameState *gs);
