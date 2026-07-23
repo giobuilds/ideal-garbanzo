@@ -24,7 +24,8 @@
 static const char *const KIND_NAMES[CMD_COUNT] = {
     "PLACE_BUILDING", "PLACE_ROAD", "DEMOLISH", "SELL_RESOURCE",
     "BUY_RESOURCE", "UPGRADE_HOUSE", "BUILD_SHIP", "SHIP_TRANSFER",
-    "SHIP_DEPART", "COLONISE", "SET_ROUTE_RES", "TOGGLE_ROUTE"
+    "SHIP_DEPART", "COLONISE", "SET_ROUTE_RES", "TOGGLE_ROUTE",
+    "GRANT_START", "ESCROW_PUT", "ESCROW_TAKE", "SET_DOCKING"
 };
 
 const char *command_kind_name(CommandKind kind)
@@ -59,11 +60,13 @@ int command_submit(GameState *gs, const Command *c)
 {
     Command stamped = *c;
 
-    /* Stamp for the next tick to run (sim_tick_no) and, for now, the
-     * single local player. sim_run_one_tick applies it when the world
-     * clock reaches that tick. */
+    /* Stamp for the next tick to run (sim_tick_no) and with the local
+     * player's identity (Phase 5: ownership validation reads this).
+     * sim_run_one_tick applies it when the world clock reaches that
+     * tick. In co-op the HOST re-stamps a guest's commands from the
+     * connection identity — the payload is never trusted for identity. */
     stamped.tick      = gs->sim_tick_no;
-    stamped.player_id = 0;
+    stamped.player_id = gs->local_player_id;
 
     return cmd_log_push(gs, &stamped);
 }

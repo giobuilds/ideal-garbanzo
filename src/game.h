@@ -34,6 +34,11 @@
 /* Gold a new game's starting island begins with. */
 #define STARTING_GOLD 1000
 
+/* Player identity (MMO_PLAN Phase 5). PLAYER_NONE marks an unowned
+ * island; real players count from 1. Single player is always player 1;
+ * a co-op guest gets its id from the host at join. */
+#define PLAYER_NONE 0u
+
 /* Fixed-timestep clock constants (SIM_TICK_MS, SIM_TICK_NS, ...). */
 #include "simclock.h"
 
@@ -163,6 +168,13 @@ typedef struct {
      * mutated only in sim_apply (trades) and sim_run_one_tick
      * (reversion). One faction serves every island's marketplace. */
     Faction   faction;
+
+    /* Who this client is (Phase 5). CLIENT state, not world state: it
+     * is never hashed and never saved — it says which player's commands
+     * this process emits (command_submit stamps it), not anything about
+     * the world. 1 in single player; a co-op guest is assigned its id
+     * by the host at join and keeps it after a disconnect. */
+    uint32_t  local_player_id;
 
     /* World seed the whole archipelago is generated from. Stored so the
      * F9 self-check (and, in Phase 1d, load) can rebuild the tick-0
@@ -398,5 +410,24 @@ int game_ship_set_route_res(GameState *gs, int ship_idx, int leg);
 /* Toggle ship `ship_idx`'s trade route on or off. When arming, the
  * route repeats the ship's last voyage (from_island -> to_island). */
 int game_ship_toggle_route(GameState *gs, int ship_idx);
+
+/* ---- Phase 5: ownership-era commands ----------------------- */
+
+/* Claim `island_idx` as the local player's starting island. Validated
+ * by the sim: the island must be unsettled and unowned, and the player
+ * must own no island yet. The co-op join bootstrap (the host emits it
+ * for a fresh guest), but equally valid locally. */
+int game_grant_start(GameState *gs, int island_idx);
+
+/* Owner only: move `qty` of `res` between `island_idx`'s stockpile and
+ * its harbor escrow. Direction by function; clamped to what is there
+ * (and, for TAKE, to storage headroom — the escrow never destroys
+ * overflow, it keeps it). */
+int game_escrow_put(GameState *gs, int island_idx, ResourceType res, int qty);
+int game_escrow_take(GameState *gs, int island_idx, ResourceType res, int qty);
+
+/* Owner only: allow (1) or forbid (0) foreign ships transferring at
+ * `island_idx`. A ship that can't dock can't deliver — blockade. */
+int game_set_docking(GameState *gs, int island_idx, int allow);
 
 #endif /* GAME_H */
