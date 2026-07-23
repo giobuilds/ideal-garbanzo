@@ -11,19 +11,25 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# Pinned so a new upstream release cannot change what CI builds without a
+# commit saying so. These are the versions Fedora 44 ships, which keeps
+# all four platforms on the same SDL.
+env:
+  SDL3_VERSION: 3.4.12
+  SDL3_TTF_VERSION: 3.2.2
+
 jobs:
   linux:
     name: Linux (Fedora, GCC)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     # Runs in a Fedora container rather than on the Ubuntu runner
     # directly, because SDL3 is genuinely not packaged for Ubuntu 24.04
     # (which is what ubuntu-latest currently is) -- it ships SDL2 only.
-    # Building SDL3 and SDL3_ttf from source and caching them is the
-    # alternative, and is what the macOS and Windows jobs will have to
-    # do when they are added. On Linux the container is both simpler
-    # and more honest: it installs exactly what BUILD.md tells a human
-    # to install, so the documented path is what gets exercised.
+    # The container installs exactly what BUILD.md tells a human to
+    # install, so the documented path is the one exercised. macOS and
+    # Windows cannot use a container and each get SDL another way.
     container: fedora:latest
 
     steps:
@@ -55,3 +61,88 @@ jobs:
         # archipelago and logs no errors. See the script's header for
         # why the font assertion specifically matters.
         run: ./ci/smoke-test.sh ./build/saltmarch 5
+
+  macos:
+    name: macOS ${{ matrix.arch }} (Clang)
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+
+    strategy:
+      # Let both architectures report independently; one failing tells
+      # us nothing useful about the other.
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-13, arch: Intel }        # x86_64 runner
+          - { os: macos-14, arch: Apple Silicon } # arm64 runner
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install SDL3 and SDL3_ttf
+        # Both are in homebrew-core (verified: sdl3 3.4.12, sdl3_ttf
+        # 3.2.2 -- the same versions Fedora ships). Homebrew installs
+        # the CMake config files, so find_package works with no hints.
+        run: brew install sdl3 sdl3_ttf
+
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Debug -DSALTMARCH_WERROR=ON
+
+      - name: Build
+        run: cmake --build build -j$(sysctl -n hw.ncpu)
+
+      - name: Smoke test
+        run: ./ci/smoke-test.sh ./build/saltmarch 5
+
+  windows:
+    name: Windows (MSVC)
+    runs-on: windows-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Fetch SDL3 and SDL3_ttf development packages
+        # Windows has no system package manager in play, but SDL ships
+        # official prebuilt MSVC packages. Using those beats building
+        # from source (minutes saved, nothing to cache) and beats vcpkg
+        # (no bootstrap, no port drift).
+        #
+        # Verified archive layout:
+        #   SDL3-<ver>/cmake/SDL3Config.cmake
+        #   SDL3-<ver>/lib/x64/SDL3.dll
+        # so CMAKE_PREFIX_PATH points at the extracted root of each.
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force -Path deps | Out-Null
+          $sdl = "SDL3-devel-$env:SDL3_VERSION-VC.zip"
+          $ttf = "SDL3_ttf-devel-$env:SDL3_TTF_VERSION-VC.zip"
+          Invoke-WebRequest -Uri "https://github.com/libsdl-org/SDL/releases/download/release-$env:SDL3_VERSION/$sdl" -OutFile "deps/$sdl"
+          Invoke-WebRequest -Uri "https://github.com/libsdl-org/SDL_ttf/releases/download/release-$env:SDL3_TTF_VERSION/$ttf" -OutFile "deps/$ttf"
+          Expand-Archive -Path "deps/$sdl" -DestinationPath deps -Force
+          Expand-Archive -Path "deps/$ttf" -DestinationPath deps -Force
+          Get-ChildItem deps -Directory | ForEach-Object { Write-Host "extracted: $($_.Name)" }
+
+      - name: Configure
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # Forward slashes: $PWD yields backslashes on Windows, and CMake
+          # treats those as escape characters inside a -D value.
+          $root = $PWD.Path -replace '\\', '/'
+          $prefix = "$root/deps/SDL3-$env:SDL3_VERSION;$root/deps/SDL3_ttf-$env:SDL3_TTF_VERSION"
+          cmake -B build -A x64 "-DCMAKE_PREFIX_PATH=$prefix" -DSALTMARCH_WERROR=ON
+
+      - name: Build
+        # MSVC is a multi-config generator, so the config is chosen here
+        # rather than at configure time, and the binary lands in
+        # build/Debug/ rather than build/.
+        run: cmake --build build --config Debug
+
+      - name: Smoke test
+        # Git Bash. The script avoids `timeout` (GNU-only) precisely so
+        # it can run here and on macOS unchanged, and .gitattributes
+        # keeps it LF so bash does not choke on CRLF.
+        shell: bash
+        run: ./ci/smoke-test.sh ./build/Debug/saltmarch.exe 5

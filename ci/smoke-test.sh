@@ -33,21 +33,51 @@ if [ ! -x "$BIN" ]; then
     exit 1
 fi
 
-# The game runs until quit, so a clean exit is not expected: timeout
-# kills it and returns 124. That 124 IS the success signal -- it means
-# the process was still alive. Any other code means it died on its own,
-# which for a game loop means it crashed or bailed during init.
-SDL_VIDEODRIVER=dummy timeout "${SECONDS_TO_RUN}s" "$BIN" >"$LOG" 2>&1
+# The game runs until quit, so a clean exit is never expected -- the
+# question is "was it still alive after N seconds?", and we have to kill
+# it ourselves to find out.
+#
+# This deliberately does NOT use `timeout`. That is GNU coreutils, and
+# macOS ships a BSD userland without it (Homebrew provides it only as
+# `gtimeout`); Git Bash on Windows is no safer a bet. Since this script
+# runs on all three CI platforms, the wait is done with a poll loop over
+# `kill -0`, which needs nothing beyond POSIX sh builtins.
+#
+# Polling rather than one flat sleep also means a crash is noticed at the
+# second it happens, so ALIVE_FOR below reports where it died.
+SDL_VIDEODRIVER=dummy "$BIN" >"$LOG" 2>&1 &
+GAME_PID=$!
+
+ALIVE_FOR=0
+SURVIVED=1
+while [ "$ALIVE_FOR" -lt "$SECONDS_TO_RUN" ]; do
+    sleep 1
+    if kill -0 "$GAME_PID" 2>/dev/null; then
+        ALIVE_FOR=$((ALIVE_FOR + 1))
+    else
+        SURVIVED=0
+        break
+    fi
+done
+
+if [ "$SURVIVED" -eq 1 ]; then
+    # Still running, as it should be. Ask nicely, then insist -- a hung
+    # process must not stall the CI job.
+    kill -TERM "$GAME_PID" 2>/dev/null
+    sleep 1
+    kill -KILL "$GAME_PID" 2>/dev/null
+fi
+wait "$GAME_PID" 2>/dev/null
 RC=$?
 
 echo "--- captured output ---"
 sed 's/^/  | /' "$LOG"
 echo "-----------------------"
 
-if [ "$RC" -eq 124 ]; then
-    pass "survived ${SECONDS_TO_RUN}s without exiting (rc=124 = still running)"
+if [ "$SURVIVED" -eq 1 ]; then
+    pass "survived ${SECONDS_TO_RUN}s without exiting"
 else
-    fail "exited early with rc=$RC — crashed or aborted during startup"
+    fail "died after ${ALIVE_FOR}s (rc=$RC) — crashed or aborted on its own"
 fi
 
 # Guard against the silent-failure class described above.

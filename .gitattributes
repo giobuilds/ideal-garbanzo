@@ -1,0 +1,13 @@
+# Shell scripts must keep LF endings even when checked out on Windows.
+# Git for Windows defaults to core.autocrlf=true, which would rewrite
+# ci/smoke-test.sh to CRLF; bash then reads the \r as part of the
+# shebang and every command, and fails with "$'\r': command not found".
+# The Windows CI job runs this script under Git Bash, so this matters.
+*.sh text eol=lf
+
+# Same reasoning for anything else consumed by a Unix-y tool.
+*.yml text eol=lf
+*.yaml text eol=lf
+
+# The bundled font is binary; never let Git "fix" its line endings.
+*.ttf binary
