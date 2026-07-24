@@ -1,7 +1,10 @@
 #ifndef INPUT_H
 #define INPUT_H
 
-#include <SDL3/SDL.h>
+/* InputState is embedded in GameState, which belongs to the SDL-free sim
+ * library (MMO_PLAN Phase 6) — so this header holds no SDL. The one
+ * SDL-shaped entry point, input_handle_event(), is declared in client.h
+ * and still implemented in input.c. */
 
 typedef struct {
     int pan_left, pan_right, pan_up, pan_down;
@@ -30,15 +33,16 @@ typedef struct {
      * 0 otherwise. Unlike left_click (an edge fired once on release,
      * cleared every frame by input_clear_clicks()), this persists
      * across frames for as long as the button is actually down — it's
-     * what drives road drag-placement (see game_update()'s per-frame
-     * drag check in game.c). Set by SDL_EVENT_MOUSE_BUTTON_DOWN/UP,
+     * what drives road drag-placement (see client_update()'s per-frame
+     * drag check in client.c). Set by SDL_EVENT_MOUSE_BUTTON_DOWN/UP,
      * NOT reset by input_clear_clicks(). */
     int left_down;
 } InputState;
 
-void           input_init(InputState *input);
-SDL_AppResult  input_handle_event(InputState *input,
-                                  const SDL_Event *event);
+/* No input_init(): InputState is plain data embedded in GameState, and
+ * game_init() zeroes it along with the rest of the struct. Calling into
+ * the client from the sim library to memset a few ints is the kind of
+ * dependency the Phase 6 split exists to remove. */
 void           input_clear_clicks(InputState *input);
 
 #endif /* INPUT_H */

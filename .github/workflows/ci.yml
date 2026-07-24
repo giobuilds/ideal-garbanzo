@@ -62,15 +62,44 @@ jobs:
         # why the font assertion specifically matters.
         run: ./ci/smoke-test.sh ./build/saltmarch 5
 
+      - name: Behaviour tests
+        # The headless assertion suite (tests/run.sh): links the game's
+        # own objects into small programs that assert real behaviour.
+        # test_headless is the Phase 6 one -- it links the sim archive
+        # alone, so it stops compiling if the sim regains a client
+        # dependency.
+        run: ./tests/run.sh
+
+      - name: Dedicated server, end to end
+        # Starts saltmarch_host on a real socket, joins it with the real
+        # game binary headlessly, and asserts the server outlives the
+        # client and checkpoints a world that replays. tests/run.sh
+        # covers the protocol deterministically over the in-memory
+        # transport; this covers the sockets and the two binaries
+        # actually talking. Bounded by --ticks, so it cannot hang CI.
+        run: ./ci/host-smoke.sh ./build
+
+      - name: Sim is SDL-free
+        # MMO_PLAN Phase 6 split the world out into libsaltmarch_sim,
+        # which the replay tool and the future server link without SDL.
+        # This asserts the split has not quietly eroded: no SDL in the
+        # declared sim sources, no SDL symbols in the built archive.
+        run: ./ci/sim-sdl-free.sh ./build/libsaltmarch_sim.a
+
       - name: Determinism replay
         # Record a scripted session to a .smlog, then replay it. --replay
         # rebuilds the world from (seed + command log) a second time and
         # asserts it lands on the same hash, so a non-zero exit means the
         # sim went nondeterministic -- the cross-platform determinism
-        # fuzzer the MMO plan calls for. No display needed (SDL_Init(0)).
+        # fuzzer the MMO plan calls for.
+        #
+        # Deliberately RECORDED by the SDL client and REPLAYED by the
+        # headless saltmarch_replay: crossing the two binaries proves
+        # they agree on the format and land on the same hash, which is
+        # the Phase 6 claim (the sim is separable) stated as a test.
         run: |
           ./build/saltmarch --record fixture.smlog --seed 12345
-          ./build/saltmarch --replay fixture.smlog
+          ./build/saltmarch_replay --replay fixture.smlog
 
   macos:
     name: macOS Apple Silicon (Clang)
@@ -101,10 +130,16 @@ jobs:
       - name: Smoke test
         run: ./ci/smoke-test.sh ./build/saltmarch 5
 
+      - name: Sim is SDL-free
+        run: ./ci/sim-sdl-free.sh ./build/libsaltmarch_sim.a
+
       - name: Determinism replay
+        # The headless tool on both ends here: it needs no SDL runtime at
+        # all, so this half of CI would keep working even if the client
+        # could not be built on the runner.
         run: |
-          ./build/saltmarch --record fixture.smlog --seed 12345
-          ./build/saltmarch --replay fixture.smlog
+          ./build/saltmarch_replay --record fixture.smlog --seed 12345
+          ./build/saltmarch_replay --replay fixture.smlog
 
   windows:
     name: Windows (MSVC)
@@ -159,8 +194,14 @@ jobs:
         shell: bash
         run: ./ci/smoke-test.sh ./build/Debug/saltmarch.exe 5
 
+      - name: Sim is SDL-free
+        shell: bash
+        run: ./ci/sim-sdl-free.sh ./build/Debug/saltmarch_sim.lib
+
       - name: Determinism replay
+        # saltmarch_replay.exe links no SDL, so unlike the game binary it
+        # needs no DLLs staged beside it -- the .smlog is the only input.
         shell: bash
         run: |
-          ./build/Debug/saltmarch.exe --record fixture.smlog --seed 12345
-          ./build/Debug/saltmarch.exe --replay fixture.smlog
+          ./build/Debug/saltmarch_replay.exe --record fixture.smlog --seed 12345
+          ./build/Debug/saltmarch_replay.exe --replay fixture.smlog

@@ -46,31 +46,61 @@ and assert real behaviour (see *Verification* below).
 ```
 saltmarch/
 ├── src/
-│   ├── main.c                 SDL3 callbacks, click cascade, render order
-│   ├── game.c/h               GameState: archipelago, overlays, save/load
+│   ├── (sim — libsaltmarch_sim, links no SDL)
+│   ├── game.c/h               GameState, sim_apply/sim_run_one_tick, save/load
+│   ├── command.c/h            The command funnel and its log
 │   ├── island.c/h             One island: map, economy, population
 │   ├── map.c/h                Tile grid + profile-driven generation
 │   ├── camera.c/h             Pan/zoom (also defines SCREEN_W/H)
-│   ├── input.c/h              Keys, mouse, held-button drag state
-│   ├── render.c/h             Isometric projection and all world drawing
 │   ├── building.c/h           BuildingDef table, placement, costs
 │   ├── resource.c/h           ResourceType, Stockpile, prices
 │   ├── population.c/h         PopData, per-tier needs
 │   ├── agent.c/h              Walking residents, labour supply
 │   ├── connectivity.c/h       Road-network BFS and pathfinding
 │   ├── ship.c/h               Voyages, cargo, trade routes
+│   ├── faction.c/h            The NPC market counterparty
+│   ├── replay.c/h             Record/replay harness (saltmarch_replay)
+│   ├── simlog.c/h             The sim's SDL-free logging shim
+│   ├── (client — window, input, drawing)
+│   ├── main.c                 SDL3 callbacks, click cascade, render order
+│   ├── client.c/h             Per-frame camera/hover update and the tick pump
+│   ├── input.c/h              Keys, mouse, held-button drag state
+│   ├── render.c/h             Isometric projection and all world drawing
 │   ├── fonts.c/h              SDL_ttf wrapper
 │   ├── ui.c/h                 HUD bar and menu overlay
 │   ├── trade_ui.c/h           Marketplace buy/sell screen
 │   ├── world_ui.c/h           Archipelago overview and ship control
+│   ├── escrow_ui.c/h          Harbor escrow panel (co-op trade)
 │   ├── build_confirm_ui.c/h   Cost confirmation (resources or Gold)
 │   ├── demolish_confirm_ui.c/h  "Destroy this building?"
-│   └── tier_upgrade_ui.c/h    Spend-Gold-to-confirm (upgrade, build ship)
+│   ├── tier_upgrade_ui.c/h    Spend-Gold-to-confirm (upgrade, build ship)
+│   ├── feed.c/h               Shared voyage feed (ghost multiplayer)
+│   ├── net.c/h                Lockstep protocol over TCP (its own library)
+│   └── replay_main.c          main() for the headless replay tool
+├── server/saltmarch_host.c    The persistent server
 ├── assets/fonts/              Bundled Liberation Sans (OFL-1.1)
+├── ci/                        Smoke test, sim-SDL-free check
+├── tests/                     Headless behaviour tests (tests/run.sh)
 ├── CMakeLists.txt
 ├── BUILD.md
+├── ARCHITECTURE.md            How the whole thing fits together
+├── SERVER.md                  Running the server, and why it looks like this
+├── MMO_PLAN.md                The deterministic-sim / multiplayer phases
 └── UI_PLAN.md                 Planned UI reorganisation (not yet started)
 ```
+
+**The sim builds without a client.** `libsaltmarch_sim` holds the world and
+links no SDL; the game links it, and so does `saltmarch_replay`, a headless
+CLI that replays a recorded command log and prints the state hash. CI
+records a session with the game binary and replays it with the tool, on
+three platforms — the determinism check and the separability check in one
+step. See [ARCHITECTURE.md](ARCHITECTURE.md).
+
+**And it runs without a player.** `saltmarch_host` is that same library
+plus a clock, a socket and a checkpoint file: a world that keeps ticking
+while everyone is logged off, that any number of clients can join with
+`--join host:port`, and whose checkpoint is an ordinary `.smlog` the
+replay tool can verify. See [SERVER.md](SERVER.md).
 
 ### Key design decisions
 

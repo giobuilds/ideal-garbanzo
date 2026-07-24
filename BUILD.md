@@ -46,10 +46,40 @@ cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j$(nproc)
 ```
 
+A build produces:
+
+| Target | What it is |
+|---|---|
+| `saltmarch` | the game (SDL3, SDL3_ttf, the bundled font) |
+| `libsaltmarch_sim.a` | the simulation as a static library — no SDL |
+| `libsaltmarch_net.a` | the lockstep protocol, shared by the game and the server — no SDL |
+| `saltmarch_replay` | headless CLI over the sim: replay a `.smlog`, print the hash, exit 0/1 |
+| `saltmarch_host` | the persistent server (see [SERVER.md](SERVER.md)) |
+
 ## 3. Run
 
 ```bash
 ./build/saltmarch
+```
+
+Headless, with no display and no SDL runtime involved:
+
+```bash
+./build/saltmarch_replay --record fixture.smlog --seed 12345
+./build/saltmarch_replay --replay fixture.smlog
+```
+
+`--replay` rebuilds the world twice from (seed + command log) and compares
+state hashes, so a non-zero exit means the simulation went
+nondeterministic. `--expect-hash <hex>` additionally pins the result to a
+known value. This is what CI runs on Linux, macOS and Windows.
+
+Multiplayer, all three shapes:
+
+```bash
+./build/saltmarch --host 7777              # host a friend
+./build/saltmarch --join 1.2.3.4:7777      # join a host or a server
+./build/saltmarch_host --world world.smlog # a world that keeps ticking
 ```
 
 ## Controls

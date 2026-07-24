@@ -17,8 +17,7 @@
  */
 
 #include "game.h"
-#include "net.h"     /* Phase 5: route submissions through a session */
-#include <SDL3/SDL.h>
+#include "simlog.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -47,7 +46,7 @@ static int cmd_log_push(GameState *gs, const Command *c)
         Command *n    = (Command *)realloc(gs->cmd_log,
                                            (size_t)ncap * sizeof(Command));
         if (!n) {
-            SDL_Log("command_submit: out of memory growing log to %d", ncap);
+            sim_log("command_submit: out of memory growing log to %d", ncap);
             return 0;
         }
         gs->cmd_log = n;
@@ -66,7 +65,7 @@ int command_submit(GameState *gs, const Command *c)
      * broadcast; guest: send upstream and wait for it to come back
      * stamped). Offline, or if the session declines, fall through to
      * local stamping. */
-    if (gs->net && net_submit_local(gs->net, gs, c))
+    if (gs->net && gs->net_submit && gs->net_submit(gs->net, gs, c))
         return 1;
 
     /* Stamp for the next tick to run (sim_tick_no) and with the local

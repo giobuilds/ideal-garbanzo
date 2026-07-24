@@ -1,8 +1,6 @@
 /*  game.c  --  Game state management  (Phase 5)  */
 
 #include "game.h"
-#include "net.h"      /* Phase 5: the lockstep tick gate */
-#include "render.h"
 #include "building.h"
 #include "resource.h"
 #include "population.h"
@@ -10,10 +8,21 @@
 #include "agent.h"
 #include "island.h"
 #include "ship.h"
-#include "ui.h"
-#include <SDL3/SDL.h>
+#include "simlog.h"
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
+
+/* A seed for "new world, no seed given". The sim owns no clock (see the
+ * determinism doctrine in MMO_PLAN.md), so this is the one place it may
+ * read one: choosing a world, not simulating it. time() alone repeats
+ * within a second, hence the clock() mix — two new games started in the
+ * same second must not be the same world. */
+static uint32_t seed_from_clock(void)
+{
+    return (uint32_t)time(NULL) * 2654435761u + (uint32_t)clock();
+}
 
 /* Shorthand for "the island every action in this file applies to".
  * Almost every function here was written when there was exactly one
@@ -156,8 +165,10 @@ GameState *game_init(void)
     GameState *gs = (GameState *)malloc(sizeof(GameState));
     if (!gs) return NULL;
 
-    input_init(&gs->input);
-    gs->last_tick  = SDL_GetTicksNS();
+    /* Plain data, zeroed here rather than through input.c: the device
+     * itself is the client's business (see input.h). */
+    memset(&gs->input, 0, sizeof(gs->input));
+    gs->last_tick  = 0;   /* seeded by client_update on its first frame */
     gs->delta_time = 0.0f;
 
     /* The command log starts empty. Zero it before anything can push,
@@ -175,9 +186,10 @@ GameState *game_init(void)
     gs->replay_tick        = 0;
 
     gs->local_player_id = 1u;
-    gs->net             = NULL;   /* attached by main.c when hosting/joining */
+    gs->net             = NULL;   /* attached by net_attach when hosting/joining */
+    gs->net_submit      = NULL;
 
-    game_reset_world(gs, (uint32_t)SDL_GetTicksNS());
+    game_reset_world(gs, seed_from_clock());
 
     return gs;
 }
@@ -199,7 +211,7 @@ void game_free(GameState *gs)
 void game_new(GameState *gs)
 {
     gs->local_player_id = 1u;
-    game_reset_world(gs, (uint32_t)SDL_GetTicksNS());
+    game_reset_world(gs, seed_from_clock());
 }
 
 /* ---- game_new_seeded ------------------------------------- */
@@ -242,17 +254,30 @@ typedef struct {
  * version bump is the rejection. */
 #define SAVE_VERSION 6u
 
+/* Plain stdio rather than SDL_IOStream (MMO_PLAN Phase 6): a save IS the
+ * server's checkpoint format and the CI fixture format, so reading and
+ * writing one must not require a client. "wb"/"rb" are load-bearing on
+ * Windows — the log is raw Command structs, and text mode would mangle
+ * every 0x0A byte in them. */
 int game_save(const GameState *gs, const char *path)
 {
-    SDL_IOStream *io = SDL_IOFromFile(path, "wb");
+    FILE         *f = fopen(path, "wb");
     SaveHeader    hdr;
     size_t        log_bytes = sizeof(Command) * (size_t)gs->cmd_count;
     int           ok;
 
-    if (!io) {
-        SDL_Log("game_save: could not open %s: %s", path, SDL_GetError());
+    if (!f) {
+        sim_log("game_save: could not open %s for writing", path);
         return 0;
     }
+
+    /* The header has trailing padding (cmd_count sits at offset 24 in a
+     * 32-byte, 8-aligned struct). Writing it uninitialised leaked four
+     * bytes of stack into every save and made two recordings of the same
+     * session differ byte-for-byte — harmless while a save was only ever
+     * a local file, not harmless now that this format is also the CI
+     * fixture and the server's checkpoint. */
+    memset(&hdr, 0, sizeof(hdr));
 
     hdr.magic          = SAVE_MAGIC;
     hdr.version        = SAVE_VERSION;
@@ -261,18 +286,20 @@ int game_save(const GameState *gs, const char *path)
     hdr.sim_tick_no    = gs->sim_tick_no;
     hdr.cmd_count      = gs->cmd_count;
 
-    ok = SDL_WriteIO(io, &hdr, sizeof(hdr)) == sizeof(hdr)
+    ok = fwrite(&hdr, sizeof(hdr), 1, f) == 1
       && (log_bytes == 0 ||
-          SDL_WriteIO(io, gs->cmd_log, log_bytes) == log_bytes);
+          fwrite(gs->cmd_log, log_bytes, 1, f) == 1);
+
+    /* fclose can fail where fwrite succeeded (a full disk only surfaces
+     * at flush), so a save is not saved until the close says so. */
+    if (fclose(f) != 0) ok = 0;
 
     if (!ok) {
-        SDL_Log("game_save: write to %s failed: %s", path, SDL_GetError());
-        SDL_CloseIO(io);
+        sim_log("game_save: write to %s failed", path);
         return 0;
     }
 
-    SDL_CloseIO(io);
-    SDL_Log("Game saved to %s (seed %u, tick %llu, %d commands)",
+    sim_log("Game saved to %s (seed %u, tick %llu, %d commands)",
             path, gs->world_seed,
             (unsigned long long)gs->sim_tick_no, gs->cmd_count);
     return 1;
@@ -287,53 +314,58 @@ int game_save(const GameState *gs, const char *path)
  * wrong-version file leaves the current world untouched. */
 int game_load(GameState *gs, const char *path)
 {
-    SDL_IOStream *io = SDL_IOFromFile(path, "rb");
-    Sint64        size_s;
-    size_t        size, need;
+    FILE          *f = fopen(path, "rb");
+    long           size_l;
+    size_t         size, need;
     unsigned char *buf;
-    SaveHeader    hdr;
+    SaveHeader     hdr;
     const Command *cmds;
 
-    if (!io) {
-        SDL_Log("game_load: could not open %s: %s", path, SDL_GetError());
+    if (!f) {
+        sim_log("game_load: could not open %s", path);
         return 0;
     }
 
-    size_s = SDL_GetIOSize(io);
-    if (size_s < (Sint64)sizeof(SaveHeader)) {
-        SDL_Log("game_load: %s is too small to be a save file", path);
-        SDL_CloseIO(io);
+    if (fseek(f, 0, SEEK_END) != 0 || (size_l = ftell(f)) < 0 ||
+        fseek(f, 0, SEEK_SET) != 0) {
+        sim_log("game_load: %s is not a seekable file", path);
+        fclose(f);
         return 0;
     }
-    size = (size_t)size_s;
+    if ((size_t)size_l < sizeof(SaveHeader)) {
+        sim_log("game_load: %s is too small to be a save file", path);
+        fclose(f);
+        return 0;
+    }
+    size = (size_t)size_l;
 
     buf = (unsigned char *)malloc(size);
-    if (!buf) { SDL_CloseIO(io); return 0; }
+    if (!buf) { fclose(f); return 0; }
 
-    if ((size_t)SDL_ReadIO(io, buf, size) != size) {
-        SDL_Log("game_load: %s could not be read in full", path);
-        SDL_CloseIO(io);
+    if (fread(buf, size, 1, f) != 1) {
+        sim_log("game_load: %s could not be read in full", path);
+        fclose(f);
         free(buf);
         return 0;
     }
-    SDL_CloseIO(io);
+    fclose(f);
 
     memcpy(&hdr, buf, sizeof(hdr));
     if (hdr.magic != SAVE_MAGIC || hdr.version != SAVE_VERSION) {
-        SDL_Log("game_load: %s is not a v%u (seed+log) save file",
+        sim_log("game_load: %s is not a v%u (seed+log) save file",
                 path, SAVE_VERSION);
         free(buf);
         return 0;
     }
     if (hdr.cmd_count < 0 ||
         hdr.current_island < 0 || hdr.current_island >= MAX_ISLANDS) {
-        SDL_Log("game_load: %s has an invalid header", path);
+        sim_log("game_load: %s has an invalid header", path);
         free(buf);
         return 0;
     }
     need = sizeof(hdr) + sizeof(Command) * (size_t)hdr.cmd_count;
     if (need > size) {
-        SDL_Log("game_load: %s is truncated", path);
+        sim_log("game_load: %s is truncated", path);
         free(buf);
         return 0;
     }
@@ -343,7 +375,7 @@ int game_load(GameState *gs, const char *path)
     cmds = (const Command *)(buf + sizeof(hdr));
     if (!game_install_world(gs, hdr.world_seed, hdr.sim_tick_no,
                             cmds, hdr.cmd_count)) {
-        SDL_Log("game_load: out of memory installing %d commands",
+        sim_log("game_load: out of memory installing %d commands",
                 hdr.cmd_count);
         free(buf);
         return 0;
@@ -352,7 +384,7 @@ int game_load(GameState *gs, const char *path)
 
     game_set_current_island(gs, hdr.current_island);
 
-    SDL_Log("Game loaded from %s (seed %u, replayed to tick %llu, %d commands)",
+    sim_log("Game loaded from %s (seed %u, replayed to tick %llu, %d commands)",
             path, hdr.world_seed,
             (unsigned long long)gs->sim_tick_no, gs->cmd_count);
     return 1;
@@ -373,127 +405,6 @@ int game_install_world(GameState *gs, uint32_t seed, uint64_t tick,
         sim_run_one_tick(gs);
 
     return 1;
-}
-
-/* ---- game_update ---------------------------------------
- * Splits cleanly in two: everything view/input related applies to the
- * CURRENT island only, then every SETTLED island is simulated —
- * including ones you aren't looking at, so a colony keeps producing
- * while you manage another. */
-void game_update(GameState *gs, SDL_Renderer *renderer)
-{
-    Island *isl = cur(gs);
-    float   lx, ly;
-
-    Uint64 now      = SDL_GetTicksNS();
-    Uint64 frame_ns = now - gs->last_tick;
-    float  dt       = (float)frame_ns / 1000000000.0f;
-    if (dt > 0.1f) dt = 0.1f;   /* cosmetic clamp for camera/hover only */
-    gs->last_tick  = now;
-    gs->delta_time = dt;
-
-    if (gs->input.pan_left)  isl->camera.offset_x += CAMERA_PAN_SPEED * dt;
-    if (gs->input.pan_right) isl->camera.offset_x -= CAMERA_PAN_SPEED * dt;
-    if (gs->input.pan_up)    isl->camera.offset_y += CAMERA_PAN_SPEED * dt;
-    if (gs->input.pan_down)  isl->camera.offset_y -= CAMERA_PAN_SPEED * dt;
-
-    /* Zoom toward cursor on mouse wheel scroll. Keeps the tile under
-     * the cursor stationary while zooming — the same behaviour as
-     * Google Maps. */
-    if (gs->input.scroll_y != 0.0f) {
-        float old_zoom = isl->camera.zoom;
-        float new_zoom = old_zoom + gs->input.scroll_y * ZOOM_STEP;
-        if (new_zoom < ZOOM_MIN) new_zoom = ZOOM_MIN;
-        if (new_zoom > ZOOM_MAX) new_zoom = ZOOM_MAX;
-        if (new_zoom != old_zoom) {
-            float cx    = (float)gs->input.logical_x;
-            float cy    = (float)gs->input.logical_y;
-            float dx    = cx - isl->camera.offset_x;
-            float dy    = cy - isl->camera.offset_y;
-            float ratio = new_zoom / old_zoom;
-            isl->camera.offset_x = cx - dx * ratio;
-            isl->camera.offset_y = cy - dy * ratio;
-            isl->camera.zoom     = new_zoom;
-        }
-    }
-
-    SDL_RenderCoordinatesFromWindow(renderer,
-        (float)gs->input.mouse_x, (float)gs->input.mouse_y, &lx, &ly);
-    gs->input.logical_x = (int)lx;
-    gs->input.logical_y = (int)ly;
-
-    if (gs->input.logical_y < SCREEN_H - HUD_HEIGHT) {
-        screen_to_iso(gs->input.logical_x, gs->input.logical_y,
-                      &isl->camera, &gs->hovered_row, &gs->hovered_col);
-        if (gs->hovered_row < 0 || gs->hovered_row >= MAP_ROWS ||
-            gs->hovered_col < 0 || gs->hovered_col >= MAP_COLS) {
-            gs->hovered_row = -1;
-            gs->hovered_col = -1;
-        }
-    } else {
-        gs->hovered_row = -1;
-        gs->hovered_col = -1;
-    }
-
-    /* Road drag-placement: while the button is held and Road is
-     * selected, place at each newly-hovered tile as the cursor
-     * crosses it (no confirm popup — see game_try_place_road()'s doc
-     * comment on why Road is exempt). Reset drag_last_row/col to -1
-     * whenever the button isn't held so the next drag's first tile
-     * is never skipped as "unchanged". */
-    if (!gs->input.left_down) {
-        gs->drag_last_row = -1;
-        gs->drag_last_col = -1;
-    } else if (gs->selected_building == BUILDING_ROAD &&
-              !gs->build_confirm_open && !gs->menu_open && !gs->trade_open &&
-              gs->hovered_row >= 0 &&
-              (gs->hovered_row != gs->drag_last_row ||
-               gs->hovered_col != gs->drag_last_col)) {
-        game_try_place_road(gs, gs->hovered_row, gs->hovered_col);
-        gs->drag_last_row = gs->hovered_row;
-        gs->drag_last_col = gs->hovered_col;
-    }
-
-    /* placement_valid reflects only "does this tile structurally
-     * work" plus "is this island even settled" — affordability is a
-     * per-payment-method question the build-confirmation popup
-     * resolves, so the player can always open it and see both options
-     * even sitting at 0 Gold. */
-    gs->placement_valid = 0;
-    if (isl->settled &&
-        gs->selected_building != BUILDING_NONE && gs->hovered_row >= 0)
-        gs->placement_valid = building_can_place(&isl->map,
-            gs->selected_building, gs->hovered_row, gs->hovered_col,
-            NULL, 0);
-
-    /* Fixed-timestep simulation. Everything above this point is
-     * cosmetic and per-frame (camera, hover, the drag-placement input);
-     * everything the sim owns advances only here, in whole ticks, so
-     * frame rate cannot change the world. Accumulate the real elapsed
-     * time and spend it one tick at a time.
-     *
-     * The accumulator is clamped so a long stall (a breakpoint, a
-     * dragged window) spends at most a bounded number of ticks catching
-     * up instead of freezing in a spiral; the world simply advances a
-     * little less during that stall, which is invisible in single
-     * player and is what the future server's continuous ticking exists
-     * to make authoritative anyway. */
-    gs->sim_acc_ns += frame_ns;
-    if (gs->sim_acc_ns > SIM_TICK_NS * 8)
-        gs->sim_acc_ns = SIM_TICK_NS * 8;
-    while (gs->sim_acc_ns >= SIM_TICK_NS) {
-        /* Lockstep gate (Phase 5): a co-op guest may only simulate
-         * ticks the host has authorised — an authorised tick is a
-         * complete tick (every command for it has arrived). When the
-         * gate closes, real time keeps accumulating (clamped above) and
-         * the sim catches up in a burst when authorisation arrives,
-         * staying in step rather than drifting. Hosts and offline play
-         * are never gated. */
-        if (gs->net && !net_tick_allowed(gs->net, gs->sim_tick_no))
-            break;
-        sim_run_one_tick(gs);
-        gs->sim_acc_ns -= SIM_TICK_NS;
-    }
 }
 
 /* ---- sim_run_one_tick -----------------------------------
@@ -631,7 +542,7 @@ int game_verify_determinism(GameState *gs)
 
     scratch = (GameState *)malloc(sizeof(GameState));
     if (!scratch) {
-        SDL_Log("game_verify_determinism: out of memory for scratch world");
+        sim_log("game_verify_determinism: out of memory for scratch world");
         gs->replay_state = 2;
         return 0;
     }
@@ -1013,7 +924,7 @@ static int sim_build_ship(GameState *gs, int island, uint32_t player)
 
     stockpile_add(&isl->stockpile, RES_GOLD, -SHIP_BUILD_COST_GOLD);
 
-    SDL_Log("Ship %d launched at %s", slot, isl->name);
+    sim_log("Ship %d launched at %s", slot, isl->name);
     return slot;
 }
 
@@ -1141,7 +1052,7 @@ static int sim_colonise(GameState *gs, int ship_idx, int island_idx,
     isl->owner   = player;
     camera_init(&isl->camera, SCREEN_W, SCREEN_H, MAP_COLS, MAP_ROWS);
 
-    SDL_Log("Colony founded on %s with %d Gold (player %u)",
+    sim_log("Colony founded on %s with %d Gold (player %u)",
             isl->name, COLONY_FOUNDING_GOLD, player);
     return 1;
 }
@@ -1245,7 +1156,7 @@ static int sim_grant_start(GameState *gs, int island_idx, uint32_t player)
     isl->owner   = player;
     camera_init(&isl->camera, SCREEN_W, SCREEN_H, MAP_COLS, MAP_ROWS);
 
-    SDL_Log("Starting island %s granted to player %u", isl->name, player);
+    sim_log("Starting island %s granted to player %u", isl->name, player);
     return 1;
 }
 
