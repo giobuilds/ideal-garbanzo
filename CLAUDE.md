@@ -14,7 +14,20 @@ cmake --build build -j$(nproc)
 ./build/saltmarch
 ```
 
-Requires `SDL3-devel` and `SDL3_ttf-devel` (Fedora package names; see BUILD.md for building SDL3 from source if not packaged). There is no test suite, linter, or CI config in this repo — verification is manual (build cleanly, run the binary, exercise the feature in-window).
+Requires `SDL3-devel` and `SDL3_ttf-devel` (Fedora package names; see BUILD.md for building SDL3 from source if not packaged).
+
+The build produces three targets: `saltmarch` (the game), `libsaltmarch_sim.a` (the simulation, no SDL), and `saltmarch_replay` (headless CLI over that library). Verification, in the order it is cheapest to run:
+
+```bash
+cmake --build build -j$(nproc)          # zero warnings is the bar
+./tests/run.sh                          # headless behaviour assertions
+./ci/sim-sdl-free.sh                    # the sim/client boundary holds
+./ci/smoke-test.sh ./build/saltmarch 5  # the binary actually lives
+./build/saltmarch_replay --record f.smlog --seed 12345 && \
+  ./build/saltmarch_replay --replay f.smlog     # determinism gate
+```
+
+`.github/workflows/ci.yml` runs all of this on Linux, macOS and Windows with warnings as errors. Anything genuinely visual still needs a human at the keyboard.
 
 The build is configured with `-Wall -Wextra -Wpedantic -Wshadow -Wconversion` (see CMakeLists.txt) — treat new warnings as bugs to fix, not noise to suppress.
 
@@ -23,6 +36,8 @@ Runs fullscreen at a fixed 1920x1080 logical resolution (`SCREEN_W`/`SCREEN_H` i
 ## Architecture
 
 Uses SDL3's callback-based app model (`SDL_MAIN_USE_CALLBACKS`), not a manual event loop. `src/main.c` implements only `SDL_AppInit` / `SDL_AppEvent` / `SDL_AppIterate` / `SDL_AppQuit` and contains no game logic — it wires subsystems together and owns the frame's render order. When adding a new subsystem, follow this pattern: give it an init/free pair and a per-frame update/render function, then call it from main.c in the right order rather than reaching into other subsystems' internals.
+
+**The sim and the client are separate build targets** (MMO_PLAN Phase 6). `SALTMARCH_SIM_SOURCES` in CMakeLists.txt is the world — game, command, map, camera, building, resource, population, connectivity, agent, island, ship, faction, replay, simlog — and it links no SDL: use `sim_log()` instead of `SDL_Log`, stdio instead of `SDL_IOStream`, `<stdint.h>` types instead of `Uint64`. The client half (main, client, input, render, ui, the `*_ui` overlays, fonts, feed, net) may use SDL freely. Code that needs both SDL and `GameState` goes in client.c. When the sim needs to reach a client subsystem, it does so through a function pointer the client installs (see `GameState.net_submit` / `net_attach()`), never a direct call — `ci/sim-sdl-free.sh` fails the build otherwise.
 
 **`GameState` (game.h) is the single top-level struct** owning every subsystem: `Map`, `Camera`, `InputState`, the `buildings[]`/`building_count` array, `Stockpile`, and `pop_data[]`. One `GameState*` is stashed in SDL's `appstate` and threaded through every callback. There is no global state outside of `BUILDING_DEFS` and `RESOURCE_NAMES` (static const tables).
 
@@ -40,7 +55,7 @@ New building types are added by extending the `BuildingType` enum and adding a m
 
 **Frame-rate independence**: all continuous movement (camera pan, production timers, population needs) is scaled by `GameState.delta_time`, computed once per frame in `game_update()` from the SDL tick delta. Don't add new per-frame increments without multiplying by `delta_time`.
 
-**Rendering fallback pattern**: `render.c` draws everything as SDL_RenderGeometry diamonds (`draw_diamond()`), colored per `TILE_COLOURS`/`BuildingDef` color fields. Sprite-based rendering existed in Phase 6 (see README.md) but was removed by the most recent commit — `src/sprite.c`/`src/sprite.h` still exist on disk but are **not** in `CMakeLists.txt`'s `SOURCES` and are dead code; don't wire them back in without checking with the user first, since their removal looks intentional.
+**Rendering fallback pattern**: `render.c` draws everything as SDL_RenderGeometry diamonds (`draw_diamond()`), colored per `TILE_COLOURS`/`BuildingDef` color fields. Sprite-based rendering existed once (README.md's "Phase 6: sprite rendering" section) and was deliberately removed; `src/sprite.c`/`src/sprite.h` are gone from the tree. Don't reintroduce sprites without checking with the user first.
 
 **Text rendering** goes through `fonts.c` (thin SDL_ttf wrapper, `fonts_init()`/`fonts_quit()`/`font_draw_text()`), not raw SDL_ttf calls — HUD, tooltips, and menu labels all use it.
 
@@ -56,7 +71,13 @@ Each `src/*.c`/`*.h` pair is a self-contained subsystem; see the header comment 
 - `render.c/h` — all drawing and the iso<->screen projection
 - `ui.c/h` — HUD bar, cog menu overlay, hit-testing
 - `fonts.c/h` — SDL_ttf wrapper
+- `client.c/h` — the per-frame client update: camera, hover, road drag, and the real-time → fixed-tick pump (this was `game_update()`)
+- `command.c/h` — the command funnel: every mutation is a logged `Command`
+- `island.c/h` — one island's pipeline; note the ordering constraint in its header
+- `ship.c/h`, `faction.c/h`, `feed.c/h`, `net.c/h` — voyages, the NPC market, the ghost feed, lockstep co-op
+- `replay.c/h` + `replay_main.c` — record/replay harness and the `saltmarch_replay` CLI
+- `simlog.c/h` — `sim_log()`, the sim's SDL-free replacement for `SDL_Log`
 
 ## History / conventions
 
-README.md's "Phase N" sections are a changelog of major feature additions (procedural gen → building placement → resource ticks → population → sprites → sprite removal/zoom) written in past commits — read it before assuming a feature (like sprites) is still in the current build; check `CMakeLists.txt`'s `SOURCES` list against `src/` to see what's actually compiled.
+README.md's "Phase N" sections are a changelog of major feature additions (procedural gen → building placement → resource ticks → population → sprites → sprite removal/zoom) written in past commits — read it before assuming a feature (like sprites) is still in the current build; check `CMakeLists.txt`'s `SALTMARCH_SIM_SOURCES` / `SALTMARCH_CLIENT_SOURCES` lists against `src/` to see what's actually compiled. MMO_PLAN.md's phases are the current work (1–5 done, 6 in progress); ARCHITECTURE.md explains how the pieces fit.

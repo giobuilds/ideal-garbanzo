@@ -19,6 +19,8 @@
 #include "feed.h"     /* MMO Phase 4: shared voyage feed */
 #include "net.h"      /* MMO Phase 5: lockstep co-op */
 #include "escrow_ui.h" /* MMO Phase 5: harbor escrow panel */
+#include "client.h"   /* MMO Phase 6: the client half of the frame */
+#include "replay.h"   /* MMO Phase 6: the headless record/replay harness */
 
 /* Feed and NetSession live here, beside the window — NOT in GameState.
  * They are client chrome: ghosts never enter sim_hash, the net session
@@ -41,108 +43,15 @@ static uint64_t wall_unix_ms(void)
 }
 
 /* ---- Headless CLI: record / replay (MMO_PLAN Phase 1d) ----
- * A deterministic scripted session used by --record to produce a .smlog
- * fixture. It touches the float-sensitive paths on purpose (a house, so
- * population and agents run; a voyage, so ship progress accumulates), so
- * that replaying it is a meaningful determinism check rather than a
- * trivial one. */
-static void record_demo_session(GameState *gs, Uint32 seed)
-{
-    Island *isl;
-    int     r, c, t, placed = 0;
-
-    game_new_seeded(gs, seed);
-    isl = game_cur_island(gs);
-
-    for (r = 0; r < MAP_ROWS && !placed; r++)
-        for (c = 0; c < MAP_COLS && !placed; c++)
-            if (building_can_place(&isl->map, BUILDING_HOUSE, r, c, NULL, 0)) {
-                gs->selected_building = BUILDING_HOUSE;
-                gs->build_confirm_row = r;
-                gs->build_confirm_col = c;
-                game_place_building_confirmed(gs, 0);
-                placed = 1;
-            }
-    gs->selected_building = BUILDING_NONE;
-
-    game_buy_resource(gs, (ResourceType)0, 8);
-    game_build_ship(gs);
-    game_ship_transfer(gs, 0, (ResourceType)0, 5);
-    game_ship_depart(gs, 0, 1);
-
-    for (t = 0; t < 500; t++)
-        sim_run_one_tick(gs);
-}
-
-/* Handle --record / --replay. Returns 1 if a CLI mode ran (with the
- * process result in *out), 0 to fall through to the normal game. */
+ * The harness itself lives in the sim library (replay.c) so the
+ * standalone saltmarch_replay tool and this binary run identical code;
+ * all that is left here is the short-circuit before a window exists. */
 static int run_cli_mode(int argc, char *argv[], SDL_AppResult *out)
 {
-    const char *replay_file = NULL, *record_file = NULL, *expect = NULL;
-    Uint32      seed = 1u;
-    GameState  *gs;
-    SDL_AppResult res = SDL_APP_SUCCESS;
-    int         i;
+    if (!replay_cli_requested(argc, argv)) return 0;
 
-    for (i = 1; i < argc; i++) {
-        if (SDL_strcmp(argv[i], "--replay") == 0 && i + 1 < argc)
-            replay_file = argv[++i];
-        else if (SDL_strcmp(argv[i], "--record") == 0 && i + 1 < argc)
-            record_file = argv[++i];
-        else if (SDL_strcmp(argv[i], "--expect-hash") == 0 && i + 1 < argc)
-            expect = argv[++i];
-        else if (SDL_strcmp(argv[i], "--seed") == 0 && i + 1 < argc)
-            seed = (Uint32)SDL_strtoul(argv[++i], NULL, 10);
-    }
-    if (!replay_file && !record_file) return 0;
-
-    SDL_Init(0);   /* base only — no video/window for headless CLI */
-
-    gs = game_init();
-    if (!gs) { SDL_Log("cli: game_init failed"); *out = SDL_APP_FAILURE;
-               SDL_Quit(); return 1; }
-
-    if (record_file) {
-        record_demo_session(gs, seed);
-        if (!game_save(gs, record_file)) res = SDL_APP_FAILURE;
-        else SDL_Log("record: %s seed=%u tick=%llu hash=%016llx",
-                     record_file, seed, (unsigned long long)gs->sim_tick_no,
-                     (unsigned long long)sim_hash(gs));
-    } else {
-        if (!game_load(gs, replay_file)) {
-            res = SDL_APP_FAILURE;
-        } else {
-            uint64_t h = sim_hash(gs);
-            SDL_Log("replay: %s tick=%llu hash=%016llx", replay_file,
-                    (unsigned long long)gs->sim_tick_no, (unsigned long long)h);
-
-            /* Self-check: rebuild the world a SECOND time from seed+log
-             * and confirm it lands on the same hash. This makes plain
-             * `--replay <file>` a determinism gate needing no expected
-             * hash — the form CI runs on every platform. */
-            if (!game_verify_determinism(gs)) {
-                SDL_Log("replay SELF-CHECK FAILED: world is nondeterministic");
-                res = SDL_APP_FAILURE;
-            }
-
-            /* Optional pin to a known hash (e.g. a committed fixture's
-             * cross-platform value). */
-            if (res == SDL_APP_SUCCESS && expect) {
-                uint64_t want = (uint64_t)SDL_strtoull(expect, NULL, 16);
-                if (want != h) {
-                    SDL_Log("replay MISMATCH: expected %016llx got %016llx",
-                            (unsigned long long)want, (unsigned long long)h);
-                    res = SDL_APP_FAILURE;
-                } else {
-                    SDL_Log("replay OK: hash matches");
-                }
-            }
-        }
-    }
-
-    game_free(gs);
-    SDL_Quit();
-    *out = res;
+    *out = replay_cli_run(argc, argv) == 0 ? SDL_APP_SUCCESS
+                                           : SDL_APP_FAILURE;
     return 1;
 }
 
@@ -220,7 +129,7 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[])
                 app->net = net_join(hostbuf, port);
             }
         }
-        if (app->net) gs->net = app->net;
+        if (app->net) net_attach(gs, app->net);
     }
 
     *appstate = app;
@@ -260,11 +169,11 @@ SDL_AppResult SDL_AppIterate(void *appstate)
         if (!net_pump(app->net, gs)) {
             net_close(app->net);
             app->net = NULL;
-            gs->net  = NULL;
+            net_detach(gs);
         }
     }
 
-    game_update(gs, app->r);
+    client_update(gs, app->r);
 
     if (app->net)
         net_after_update(app->net, gs);
@@ -277,8 +186,8 @@ SDL_AppResult SDL_AppIterate(void *appstate)
     feed_poll(&app->feed, SDL_GetTicksNS());
 
     /* Everything below acts on the island currently being viewed;
-     * game_update() has already simulated every settled one. Fetched
-     * after game_update() because a menu action there (New Game /
+     * client_update() has already simulated every settled one. Fetched
+     * after client_update() because a menu action there (New Game /
      * Load) can change which island is current. */
     isl = game_cur_island(gs);
 
@@ -604,7 +513,7 @@ SDL_AppResult SDL_AppIterate(void *appstate)
                     }
                 } else if (gs->selected_building == BUILDING_ROAD) {
                     /* Roads are exempt from the confirm popup — also
-                     * placeable by dragging (game_update()'s per-frame
+                     * placeable by dragging (client_update()'s per-frame
                      * drag check), and a per-tile confirmation would
                      * make that gesture unusable. A single click
                      * behaves the same way a 1-tile drag does. */

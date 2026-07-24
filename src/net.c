@@ -632,6 +632,23 @@ int net_submit_local(NetSession *ns, GameState *gs, const Command *c)
     return send_msg(ns, MSG_CMD, c, (uint32_t)sizeof(*c));
 }
 
+/* ---- attach / detach ---------------------------------------
+ * The sim library knows nothing about net.c (MMO_PLAN Phase 6), so a
+ * session reaches command_submit through a function pointer rather than
+ * a link-time dependency. Attaching sets both halves together; detaching
+ * clears both, which is what leaves the world running single-player
+ * after a disconnect. */
+void net_attach(GameState *gs, NetSession *ns)
+{
+    gs->net        = ns;
+    gs->net_submit = ns ? net_submit_local : NULL;
+}
+
+void net_detach(GameState *gs)
+{
+    net_attach(gs, NULL);
+}
+
 int net_tick_allowed(const NetSession *ns, uint64_t tick)
 {
     if (ns->is_host || !ns->alive) return 1;

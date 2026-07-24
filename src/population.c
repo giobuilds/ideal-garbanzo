@@ -2,7 +2,7 @@
  *  needs added in the production-chains pass)  */
 
 #include "population.h"
-#include <SDL3/SDL.h>   /* SDL_Log */
+#include "simlog.h"
 
 /* ---- Per-tier needs table --------------------------------
  * Keyed by the house's actual BuildingType, so upgrading a house
@@ -93,7 +93,7 @@ void pop_update(PopData pop[], const Building buildings[], int count,
             if (p->residents < HOUSE_CAPACITY)
                 p->residents++;
 
-            SDL_Log("House %d: happy, %d residents, +%d gold",
+            sim_log("House %d: happy, %d residents, +%d gold",
                 i, p->residents,
                 GOLD_PER_RESIDENT * p->residents);
 
@@ -103,7 +103,7 @@ void pop_update(PopData pop[], const Building buildings[], int count,
             if (p->residents > 0)
                 p->residents--;
 
-            SDL_Log("House %d: unhappy (%s), %d residents",
+            sim_log("House %d: unhappy (%s), %d residents",
                 i,
                 !buildings[i].connected ? "no road to Warehouse" :
                     "missing a required good",

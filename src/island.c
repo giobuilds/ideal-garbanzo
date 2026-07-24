@@ -3,7 +3,7 @@
 #include "island.h"
 #include "connectivity.h"
 #include "simclock.h"
-#include <SDL3/SDL.h>
+#include "simlog.h"
 #include <string.h>
 
 /* ---- island_reset -------------------------------------- */
@@ -19,7 +19,10 @@ void island_reset(Island *isl, uint32_t seed, MapProfile profile,
 
     isl->profile = profile;
     isl->settled = settled;
-    SDL_strlcpy(isl->name, name ? name : "Island", ISLAND_NAME_LEN);
+    /* strncpy + explicit terminator rather than SDL_strlcpy: this file
+     * is part of the SDL-free sim library (MMO_PLAN Phase 6). */
+    strncpy(isl->name, name ? name : "Island", ISLAND_NAME_LEN - 1);
+    isl->name[ISLAND_NAME_LEN - 1] = '\0';
 
     /* Ownership starts empty (game_reset_world assigns the starting
      * island; colonisation/grants assign the rest) and docking open —
@@ -28,7 +31,7 @@ void island_reset(Island *isl, uint32_t seed, MapProfile profile,
     isl->docking_allowed = 1;
     /* escrow[] was zeroed by the memset above. */
 
-    SDL_Log("Island '%s' generated (seed=%u, profile=%d, settled=%d)",
+    sim_log("Island '%s' generated (seed=%u, profile=%d, settled=%d)",
             isl->name, seed, (int)profile, settled);
 }
 
@@ -69,7 +72,7 @@ static void island_tick_buildings(Island *isl)
         for (j = 0; j < MAX_BUILDING_INPUTS; j++) {
             if (def->consumes[j] == RES_COUNT) continue;
             if (isl->stockpile.amount[def->consumes[j]] < def->consume_amt[j]) {
-                SDL_Log("[%s] %s idle: needs %d %s", isl->name, def->name,
+                sim_log("[%s] %s idle: needs %d %s", isl->name, def->name,
                     def->consume_amt[j], RESOURCE_NAMES[def->consumes[j]]);
                 can_run = 0;
                 break;
@@ -84,7 +87,7 @@ static void island_tick_buildings(Island *isl)
 
         if (def->produces != RES_COUNT) {
             stockpile_add(&isl->stockpile, def->produces, def->produce_amt);
-            SDL_Log("[%s] %s produced %d %s  (total: %d)",
+            sim_log("[%s] %s produced %d %s  (total: %d)",
                 isl->name, def->name, def->produce_amt,
                 RESOURCE_NAMES[def->produces],
                 isl->stockpile.amount[def->produces]);

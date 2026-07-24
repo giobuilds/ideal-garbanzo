@@ -16,9 +16,15 @@
  * game_cur_island(); the per-island simulation itself is
  * island_update(), which runs for every settled island each frame,
  * not just the one on screen.
+ *
+ * This header is SDL-free (MMO_PLAN Phase 6): GameState and the sim
+ * entry points below compile into libsaltmarch_sim, which the headless
+ * replay tool and the future server host link WITHOUT SDL. The
+ * SDL-facing client half — the per-frame camera/hover update and event
+ * handling — lives in client.h.
  * ========================================================= */
 
-#include <SDL3/SDL.h>
+#include <stdint.h>
 #include "map.h"
 #include "camera.h"      /* also provides SCREEN_W / SCREEN_H */
 #include "input.h"
@@ -42,7 +48,9 @@
 /* Fixed-timestep clock constants (SIM_TICK_MS, SIM_TICK_NS, ...). */
 #include "simclock.h"
 
-typedef struct {
+/* Tagged (rather than an anonymous typedef) so the net hooks below can
+ * name the type from inside the struct that owns them. */
+typedef struct GameState {
     /* ---- The archipelago ----------------------------------
      * Every island exists from world-gen; `settled` (island.h)
      * decides which are simulated and buildable. current_island is
@@ -60,11 +68,12 @@ typedef struct {
     int hovered_col;
 
     /* Time tracking for frame-rate-independent movement.
-    * last_tick  – SDL timestamp (ms) at the end of the previous frame.
+    * last_tick  – client timestamp (ns) at the end of the previous frame,
+    *              0 before the first frame (client_update seeds it).
     * delta_time – seconds elapsed since that frame (e.g. 0.016 at 60fps).
     * All per-frame movement is multiplied by delta_time so the game
     * behaves identically at 30, 60, or 144 fps. */
-    Uint64 last_tick;
+    uint64_t last_tick;
     float delta_time;
 
     /* Which building type the player has selected from the HUD.
@@ -185,8 +194,18 @@ typedef struct {
      * infrastructure like local_player_id: owned by App (main.c),
      * referenced here only so command_submit can route submissions and
      * the tick loop can respect the guest's authorisation horizon.
-     * Never hashed, never saved. */
+     * Never hashed, never saved.
+     *
+     * net_submit is how the sim reaches a session without knowing what
+     * one is (MMO_PLAN Phase 6): net.c is a CLIENT file, so a direct
+     * call to net_submit_local() from command.c would drag the whole
+     * transport into the headless sim library. net_attach() installs
+     * the hook; it is NULL whenever `net` is, and the sim treats both
+     * cases identically. (The tick gate needs no hook — the tick pump
+     * itself is client-side, in client.c.) */
     struct NetSession *net;
+    int (*net_submit)(struct NetSession *ns, struct GameState *gs,
+                      const Command *c);
 
     /* World seed the whole archipelago is generated from. Stored so the
      * F9 self-check (and, in Phase 1d, load) can rebuild the tick-0
@@ -321,9 +340,9 @@ int  game_load(GameState *gs, const char *path);
 
 #define SAVE_FILE_PATH "saltmarch_save.dat"
 
-/* Called once per frame.  Moves the camera based on held
- * keys and updates the hovered tile from mouse position. */
-void game_update(GameState *gs, SDL_Renderer *renderer);  /* CHANGED: needs renderer for coord conversion */
+/* The per-frame client update (camera, hover, drag input, and the
+ * accumulator that spends real time on fixed sim ticks) lives in
+ * client.h/client.c — it needs SDL, so it cannot live here. */
 
 /* Attempts to place a Road at (row, col) directly — no confirmation
  * popup. Roads are the one building type exempt from

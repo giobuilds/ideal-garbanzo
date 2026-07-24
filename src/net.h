@@ -87,6 +87,14 @@ int net_pump(NetSession *ns, GameState *gs);
  * tick authorisation and both sides emit any due hash report. */
 void net_after_update(NetSession *ns, GameState *gs);
 
+/* Point `gs` at a session (or, with ns == NULL / net_detach, at none):
+ * sets gs->net and installs the command-routing hook the sim calls
+ * through. This is the ONLY supported way to attach a session — the sim
+ * library does not link net.c, so setting gs->net by hand would leave
+ * submissions taking the offline path (MMO_PLAN Phase 6). */
+void net_attach(GameState *gs, NetSession *ns);
+void net_detach(GameState *gs);
+
 /* command_submit's routing hook. Returns 1 if the session handled the
  * submission (host: stamped+logged+broadcast; guest: sent to host), 0
  * if the caller should fall back to local single-player stamping. */

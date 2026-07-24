@@ -1,12 +1,8 @@
 /*  input.c  --  Input handling  (Phase 3)  */
 
 #include "input.h"
+#include "client.h"   /* input_handle_event's SDL-shaped declaration */
 #include <string.h>
-
-void input_init(InputState *input)
-{
-    memset(input, 0, sizeof(InputState));
-}
 
 SDL_AppResult input_handle_event(InputState *input,
                                  const SDL_Event *event)

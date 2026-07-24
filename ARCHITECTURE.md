@@ -17,6 +17,12 @@ Saltmarch is a C99 isometric city-builder on SDL3's callback app model
 callbacks and contains no game logic — it wires subsystems together and
 owns the frame's render order.
 
+- **Two build targets, one codebase.** `libsaltmarch_sim` is the world —
+  map, buildings, population, agents, ships, market, the command funnel and
+  the save/replay format — and links no SDL at all. The client (window,
+  input, rendering, UI overlays, feed, co-op sockets) links it. Anything
+  needing both SDL and `GameState` lives in client.c; `ci/sim-sdl-free.sh`
+  fails the build if SDL creeps back across the line.
 - **One top-level struct.** `GameState` (game.h) owns every subsystem: the
   tile `Map`, `Camera`, `InputState`, the `buildings[]` array with its
   parallel `pop_data[]`, and the `Stockpile`. A single `GameState*` rides in
@@ -87,8 +93,12 @@ Each rung is independently shippable and none requires the next:
    commands against islands you don't own. Player-to-player exchange
    happens the only way it architecturally can — a ship voyage into a
    harbor escrow.
-6. **The headless twin** — the sim splits into an SDL-free static library;
-   the eventual persistent server is that library behind a thin host
+6. **The headless twin** — the sim is an SDL-free static library
+   (`libsaltmarch_sim`) with a CLI front end, `saltmarch_replay`, that
+   loads a `.smlog`, replays it and prints the state hash. CI records a
+   session with the game and replays it with the tool on three platforms,
+   so "the sim is separable" is a test rather than a claim. The remaining
+   step is the persistent server: that same library behind a thin host
    process that owns the canonical log, keeps ticking while players are
    offline, and checkpoints so join-in-progress is checkpoint + log tail.
    (This is EVE Online's single-shard command-replay architecture at

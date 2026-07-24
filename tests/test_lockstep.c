@@ -76,8 +76,11 @@ int main(void)
     NetSession *hn = net_pair_mem(&gn);
     CHECK(hn != NULL && gn != NULL, "host+guest pair created");
     if (!hn || !gn) return 1;
-    hg->net = hn;
-    gg->net = gn;
+    /* net_attach, not `gs->net = ...`: since MMO_PLAN Phase 6 the sim
+     * reaches the session through a hook net_attach installs, so a bare
+     * assignment would leave every submission taking the offline path. */
+    net_attach(hg, hn);
+    net_attach(gg, gn);
 
     /* ---- join: world transfer, identity, the grant ---- */
     for (i = 0; i < 40; i++) step(hn, hg, gn, gg, 1);
@@ -137,13 +140,13 @@ int main(void)
           "still in lockstep after 120 more ticks and hash exchanges");
 
     /* ---- disconnect: single-player continuation ---- */
-    hg->net = NULL;
+    net_detach(hg);
     net_close(hn);                       /* host quits (sends BYE)      */
     for (i = 0; i < 5; i++) {
         if (gn && !net_pump(gn, gg)) {   /* guest notices the loss      */
             net_close(gn);
             gn = NULL;
-            gg->net = NULL;
+            net_detach(gg);
         }
     }
     CHECK(gn == NULL, "guest detected the disconnect");
