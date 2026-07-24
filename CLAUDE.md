@@ -16,13 +16,14 @@ cmake --build build -j$(nproc)
 
 Requires `SDL3-devel` and `SDL3_ttf-devel` (Fedora package names; see BUILD.md for building SDL3 from source if not packaged).
 
-The build produces three targets: `saltmarch` (the game), `libsaltmarch_sim.a` (the simulation, no SDL), and `saltmarch_replay` (headless CLI over that library). Verification, in the order it is cheapest to run:
+The build produces five targets: `saltmarch` (the game), `libsaltmarch_sim.a` (the simulation, no SDL), `libsaltmarch_net.a` (the lockstep protocol, no SDL, shared by game and server), `saltmarch_replay` (headless CLI over the sim) and `saltmarch_host` (the persistent server — see SERVER.md). Verification, in the order it is cheapest to run:
 
 ```bash
 cmake --build build -j$(nproc)          # zero warnings is the bar
 ./tests/run.sh                          # headless behaviour assertions
 ./ci/sim-sdl-free.sh                    # the sim/client boundary holds
 ./ci/smoke-test.sh ./build/saltmarch 5  # the binary actually lives
+./ci/host-smoke.sh ./build              # server + client over real TCP
 ./build/saltmarch_replay --record f.smlog --seed 12345 && \
   ./build/saltmarch_replay --replay f.smlog     # determinism gate
 ```
@@ -74,7 +75,8 @@ Each `src/*.c`/`*.h` pair is a self-contained subsystem; see the header comment 
 - `client.c/h` — the per-frame client update: camera, hover, road drag, and the real-time → fixed-tick pump (this was `game_update()`)
 - `command.c/h` — the command funnel: every mutation is a logged `Command`
 - `island.c/h` — one island's pipeline; note the ordering constraint in its header
-- `ship.c/h`, `faction.c/h`, `feed.c/h`, `net.c/h` — voyages, the NPC market, the ghost feed, lockstep co-op
+- `ship.c/h`, `faction.c/h`, `feed.c/h` — voyages, the NPC market, the ghost feed
+- `net.c/h` — the lockstep protocol (its own SDL-free library); `server/saltmarch_host.c` is the dedicated server over it
 - `replay.c/h` + `replay_main.c` — record/replay harness and the `saltmarch_replay` CLI
 - `simlog.c/h` — `sim_log()`, the sim's SDL-free replacement for `SDL_Log`
 

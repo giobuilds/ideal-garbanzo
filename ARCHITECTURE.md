@@ -97,12 +97,16 @@ Each rung is independently shippable and none requires the next:
    (`libsaltmarch_sim`) with a CLI front end, `saltmarch_replay`, that
    loads a `.smlog`, replays it and prints the state hash. CI records a
    session with the game and replays it with the tool on three platforms,
-   so "the sim is separable" is a test rather than a claim. The remaining
-   step is the persistent server: that same library behind a thin host
-   process that owns the canonical log, keeps ticking while players are
-   offline, and checkpoints so join-in-progress is checkpoint + log tail.
-   (This is EVE Online's single-shard command-replay architecture at
-   solo-dev scale.)
+   so "the sim is separable" is a test rather than a claim. The server,
+   `saltmarch_host`, is that library plus a clock, a socket and a
+   checkpoint file: it owns the canonical log, ticks continuously
+   (including while every player is logged off — that is where offline
+   progression lives, with no separate formula for it), and checkpoints
+   to an ordinary `.smlog`. Its transport is the client's own net.c,
+   generalised from one guest to many. (This is EVE Online's single-shard
+   command-replay architecture at solo-dev scale.) Deferred with reasons
+   in SERVER.md: authentication, log truncation, sharding — and Carbon,
+   which the host does not use and why.
 
 ## The UI layer mirrors the sim's discipline
 
@@ -131,7 +135,8 @@ UI_PLAN.md applies the same philosophy above the sim boundary:
 ## Boundaries that stay fixed
 
 - The sim never touches SDL; rendering, input and UI never mutate the sim.
-- The client stays C99. Only an eventual server host process may be C++.
+- The whole tree stays C99, server included. The option to write a host
+  in C++ was left open by MMO_PLAN and deliberately not taken (SERVER.md).
 - Island tiles are never synced between players; there is no fog of war.
 - Text rendering goes through fonts.c; projections through render.c's two
   conversion functions; warnings are bugs

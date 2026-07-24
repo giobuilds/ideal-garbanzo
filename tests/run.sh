@@ -11,6 +11,7 @@ root="$(cd "$(dirname "$0")/.." && pwd)"
 builddir="$root/build"
 linkfile="$builddir/CMakeFiles/saltmarch.dir/link.txt"
 simlib="$builddir/libsaltmarch_sim.a"
+netlib="$builddir/libsaltmarch_net.a"
 
 if [ ! -f "$linkfile" ] || [ ! -f "$simlib" ]; then
     echo "build objects not found; run: cmake -B build && cmake --build build" >&2
@@ -42,7 +43,7 @@ for src in "$root"/tests/test_*.c; do
         link_objs=""
         link_sdl=""
     else
-        link_objs="$objs"
+        link_objs="$objs $netlib"
         link_sdl="$sdlflags"
     fi
 

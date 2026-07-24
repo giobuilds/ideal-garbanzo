@@ -75,14 +75,16 @@ saltmarch/
 │   ├── demolish_confirm_ui.c/h  "Destroy this building?"
 │   ├── tier_upgrade_ui.c/h    Spend-Gold-to-confirm (upgrade, build ship)
 │   ├── feed.c/h               Shared voyage feed (ghost multiplayer)
-│   ├── net.c/h                Lockstep co-op over TCP
+│   ├── net.c/h                Lockstep protocol over TCP (its own library)
 │   └── replay_main.c          main() for the headless replay tool
+├── server/saltmarch_host.c    The persistent server
 ├── assets/fonts/              Bundled Liberation Sans (OFL-1.1)
 ├── ci/                        Smoke test, sim-SDL-free check
 ├── tests/                     Headless behaviour tests (tests/run.sh)
 ├── CMakeLists.txt
 ├── BUILD.md
 ├── ARCHITECTURE.md            How the whole thing fits together
+├── SERVER.md                  Running the server, and why it looks like this
 ├── MMO_PLAN.md                The deterministic-sim / multiplayer phases
 └── UI_PLAN.md                 Planned UI reorganisation (not yet started)
 ```
@@ -93,6 +95,12 @@ CLI that replays a recorded command log and prints the state hash. CI
 records a session with the game binary and replays it with the tool, on
 three platforms — the determinism check and the separability check in one
 step. See [ARCHITECTURE.md](ARCHITECTURE.md).
+
+**And it runs without a player.** `saltmarch_host` is that same library
+plus a clock, a socket and a checkpoint file: a world that keeps ticking
+while everyone is logged off, that any number of clients can join with
+`--join host:port`, and whose checkpoint is an ordinary `.smlog` the
+replay tool can verify. See [SERVER.md](SERVER.md).
 
 ### Key design decisions
 

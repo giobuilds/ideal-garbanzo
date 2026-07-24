@@ -70,6 +70,15 @@ jobs:
         # dependency.
         run: ./tests/run.sh
 
+      - name: Dedicated server, end to end
+        # Starts saltmarch_host on a real socket, joins it with the real
+        # game binary headlessly, and asserts the server outlives the
+        # client and checkpoints a world that replays. tests/run.sh
+        # covers the protocol deterministically over the in-memory
+        # transport; this covers the sockets and the two binaries
+        # actually talking. Bounded by --ticks, so it cannot hang CI.
+        run: ./ci/host-smoke.sh ./build
+
       - name: Sim is SDL-free
         # MMO_PLAN Phase 6 split the world out into libsaltmarch_sim,
         # which the replay tool and the future server link without SDL.

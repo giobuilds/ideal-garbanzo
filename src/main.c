@@ -104,12 +104,27 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[])
      * session (or defaults to player 1 offline). */
     feed_init(&app->feed, SDL_getenv("SALTMARCH_PLAYER"));
 
-    /* Co-op (Phase 5): --host [port] listens for one guest; --join
-     * host[:port] connects to one. The session lives in App; gs->net is
-     * the routing pointer command_submit and the tick gate consult. */
+    /* Co-op (Phase 5): --host [port] listens for players; --join
+     * host[:port] connects to a host or to saltmarch_host, the dedicated
+     * server (Phase 6) — the client cannot tell the two apart, which is
+     * the point. --as N asks to resume the identity a previous session
+     * was given, so your island is still yours after a reconnect; the id
+     * to pass is the one the join logged and the HUD shows. The session
+     * lives in App; gs->net is the routing pointer command_submit and
+     * the tick gate consult. */
     app->net = NULL;
     {
-        int i;
+        int      i;
+        uint32_t resume_id = PLAYER_NONE;
+        char     hostbuf[128] = {0};
+        uint16_t join_port = NET_DEFAULT_PORT;
+        int      want_join = 0;
+
+        /* Two passes: --as may appear on either side of --join. */
+        for (i = 1; i < argc; i++)
+            if (SDL_strcmp(argv[i], "--as") == 0 && i + 1 < argc)
+                resume_id = (uint32_t)SDL_strtoul(argv[++i], NULL, 10);
+
         for (i = 1; i < argc; i++) {
             if (SDL_strcmp(argv[i], "--host") == 0) {
                 uint16_t port = NET_DEFAULT_PORT;
@@ -117,18 +132,18 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[])
                     port = (uint16_t)SDL_strtoul(argv[++i], NULL, 10);
                 app->net = net_host(port);
             } else if (SDL_strcmp(argv[i], "--join") == 0 && i + 1 < argc) {
-                char     hostbuf[128];
-                char    *colon;
-                uint16_t port = NET_DEFAULT_PORT;
+                char *colon;
                 SDL_strlcpy(hostbuf, argv[++i], sizeof(hostbuf));
                 colon = SDL_strchr(hostbuf, ':');
                 if (colon) {
                     *colon = '\0';
-                    port = (uint16_t)SDL_strtoul(colon + 1, NULL, 10);
+                    join_port = (uint16_t)SDL_strtoul(colon + 1, NULL, 10);
                 }
-                app->net = net_join(hostbuf, port);
+                want_join = 1;
             }
         }
+        if (want_join)
+            app->net = net_join(hostbuf, join_port, resume_id);
         if (app->net) net_attach(gs, app->net);
     }
 
@@ -683,11 +698,22 @@ SDL_AppResult SDL_AppIterate(void *appstate)
         }
     }
 
-    /* Co-op status line, top-left, whenever a session exists. */
+    /* Co-op / server status line, top-left, whenever a session exists.
+     * The identity goes on the same line because it is the one thing a
+     * player needs to write down: reconnecting to a persistent server
+     * with --as N is how you get your island back (SERVER.md). */
     if (app->net) {
         SDL_Color net_col = { 160, 210, 250, 255 };
-        font_draw_text(app->r, FONT_SMALL, net_status(app->net),
-                       16, 8, net_col);
+        char      line[128];
+        uint32_t  id = net_resume_id(app->net);
+
+        if (id != PLAYER_NONE)
+            SDL_snprintf(line, sizeof(line), "%s  |  player %u (--as %u)",
+                         net_status(app->net), id, id);
+        else
+            SDL_strlcpy(line, net_status(app->net), sizeof(line));
+
+        font_draw_text(app->r, FONT_SMALL, line, 16, 8, net_col);
     }
 
     /* F9 determinism result, shown top-centre for a few seconds. */

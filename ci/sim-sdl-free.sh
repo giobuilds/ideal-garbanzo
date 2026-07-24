@@ -12,10 +12,12 @@
 # Two independent checks, because each catches what the other misses:
 #
 #   1. Source grep over the exact file list CMakeLists.txt declares as
-#      SALTMARCH_SIM_SOURCES. Fails early, names the file and line.
+#      SALTMARCH_SIM_SOURCES, plus net.c and the server (everything
+#      saltmarch_host links). Fails early, names the file and line.
 #   2. Symbol scan of the built archive for undefined SDL_* references.
 #      Catches SDL reached indirectly, via a header or a macro, which no
-#      grep for "SDL" in the .c files would see. Skipped when nm is
+#      grep for "SDL" in the .c files would see. Both archives, since a
+#      server that cannot avoid SDL is not a server. Skipped when nm is
 #      unavailable (MSVC), where check 1 still applies.
 #
 # Usage: ci/sim-sdl-free.sh [path-to-libsaltmarch_sim.a]
@@ -24,16 +26,20 @@ set -uo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
 lib="${1:-$root/build/libsaltmarch_sim.a}"
+netlib="$(dirname "$lib")/libsaltmarch_net.a"
 failures=0
 
 fail() { printf '  FAIL: %s\n' "$1"; failures=$((failures + 1)); }
 pass() { printf '  ok:   %s\n' "$1"; }
 
-echo "== sim SDL-free check =="
+echo "== SDL-free check (sim, net, server) =="
 
 # --- 1. the declared sim sources, straight out of CMakeLists.txt ---
+# The sim proper, plus net.c and the server: everything the dedicated
+# server links must be SDL-free, or saltmarch_host stops building at all.
 sources=$(sed -n '/^set(SALTMARCH_SIM_SOURCES/,/^)/p' "$root/CMakeLists.txt" \
           | grep -o 'src/[A-Za-z0-9_]*\.c')
+sources="$sources src/net.c server/saltmarch_host.c"
 
 if [ -z "$sources" ]; then
     fail "could not read SALTMARCH_SIM_SOURCES out of CMakeLists.txt"
@@ -53,7 +59,7 @@ for src in $sources; do
         hits=$((hits + 1))
     fi
 done
-[ "$hits" -eq 0 ] && pass "no SDL in $(echo "$sources" | wc -l | tr -d ' ') sim sources"
+[ "$hits" -eq 0 ] && pass "no SDL in $(echo "$sources" | wc -w | tr -d ' ') sim/net/server sources"
 
 # --- 2. the built archive's undefined symbols ---
 if ! command -v nm >/dev/null 2>&1; then
@@ -61,19 +67,23 @@ if ! command -v nm >/dev/null 2>&1; then
 elif [ ! -f "$lib" ]; then
     fail "sim library not found at $lib (build first)"
 else
-    undef=$(nm --undefined-only "$lib" 2>/dev/null | grep -o 'SDL_[A-Za-z0-9_]*' | sort -u)
-    if [ -n "$undef" ]; then
-        fail "libsaltmarch_sim needs SDL symbols:"
-        printf '        %s\n' $undef
-    else
-        pass "libsaltmarch_sim links no SDL symbols"
-    fi
+    for archive in "$lib" "$netlib"; do
+        [ -f "$archive" ] || continue
+        undef=$(nm --undefined-only "$archive" 2>/dev/null \
+                | grep -o 'SDL_[A-Za-z0-9_]*' | sort -u)
+        if [ -n "$undef" ]; then
+            fail "$(basename "$archive") needs SDL symbols:"
+            printf '        %s\n' $undef
+        else
+            pass "$(basename "$archive") links no SDL symbols"
+        fi
+    done
 fi
 
 echo
 if [ "$failures" -eq 0 ]; then
-    echo "SIM IS SDL-FREE"
+    echo "SIM, NET AND SERVER ARE SDL-FREE"
     exit 0
 fi
-echo "SIM SDL-FREE CHECK FAILED ($failures)"
+echo "SDL-FREE CHECK FAILED ($failures)"
 exit 1

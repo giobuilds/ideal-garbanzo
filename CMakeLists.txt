@@ -72,8 +72,15 @@ set(SALTMARCH_SIM_SOURCES
 add_library(saltmarch_sim STATIC ${SALTMARCH_SIM_SOURCES})
 target_include_directories(saltmarch_sim PUBLIC ${CMAKE_SOURCE_DIR}/src)
 
-# The client: window, input, rendering, UI overlays, and the two
-# out-of-process-ish extras (the shared feed, the co-op socket layer).
+# The transport (MMO_PLAN Phase 6). Not part of the sim -- the sim stays
+# network-ignorant -- but not part of the client either, because the
+# dedicated server speaks the same protocol with no client attached.
+# SDL-free for that reason, so it sits in its own small library that both
+# the game and saltmarch_host link.
+add_library(saltmarch_net STATIC src/net.c)
+target_link_libraries(saltmarch_net PUBLIC saltmarch_sim)
+
+# The client: window, input, rendering, UI overlays, and the shared feed.
 # Everything here may use SDL; nothing here may be needed by the sim.
 set(SALTMARCH_CLIENT_SOURCES
     src/main.c
@@ -88,7 +95,6 @@ set(SALTMARCH_CLIENT_SOURCES
     src/tier_upgrade_ui.c
     src/world_ui.c
     src/feed.c
-    src/net.c
     src/escrow_ui.c
 )
 
@@ -99,6 +105,12 @@ add_executable(saltmarch ${SALTMARCH_CLIENT_SOURCES})
 # links no SDL at all.
 add_executable(saltmarch_replay src/replay_main.c)
 target_link_libraries(saltmarch_replay PRIVATE saltmarch_sim)
+
+# The persistent server: the sim, the transport, a clock and a
+# checkpoint file. No SDL, no window, no assets -- it runs anywhere a
+# C99 compiler and a socket do.
+add_executable(saltmarch_host server/saltmarch_host.c)
+target_link_libraries(saltmarch_host PRIVATE saltmarch_net)
 
 # Copy assets next to the binary after every build. fonts.c resolves the
 # font via SDL_GetBasePath() (the executable's directory), which is what
@@ -133,6 +145,7 @@ if(WIN32)
 endif()
 
 target_link_libraries(saltmarch PRIVATE
+    saltmarch_net
     saltmarch_sim
     SDL3::SDL3
     SDL3_ttf::SDL3_ttf
@@ -155,8 +168,9 @@ if(MATH_LIBRARY)
     target_link_libraries(saltmarch     PRIVATE ${MATH_LIBRARY})
 endif()
 
-# Winsock for the co-op TCP layer (net.c). BSD sockets need no extra
-# library on Linux/macOS.
+# Winsock for the TCP layer (net.c). BSD sockets need no extra library
+# on Linux/macOS. PUBLIC so both the game and the server inherit it from
+# saltmarch_net rather than each remembering to name it.
 if(WIN32)
-    target_link_libraries(saltmarch PRIVATE ws2_32)
+    target_link_libraries(saltmarch_net PUBLIC ws2_32)
 endif()
