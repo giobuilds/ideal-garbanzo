@@ -37,6 +37,11 @@
 #ifdef _WIN32
 #  include <winsock2.h>
 #  include <ws2tcpip.h>
+   /* Explicitly, and only AFTER winsock2.h: this file used to reach
+    * windows.h through SDL, and Sleep() below comes from there. Relying
+    * on winsock2.h to drag it in is exactly the include-order trap the
+    * comment above warns about. */
+#  include <windows.h>
    typedef SOCKET sock_t;
 #  define BAD_SOCK        INVALID_SOCKET
 #  define sock_close(s)   closesocket(s)

@@ -4,6 +4,7 @@
 #include "connectivity.h"
 #include "simclock.h"
 #include "simlog.h"
+#include <stdio.h>
 #include <string.h>
 
 /* ---- island_reset -------------------------------------- */
@@ -19,10 +20,12 @@ void island_reset(Island *isl, uint32_t seed, MapProfile profile,
 
     isl->profile = profile;
     isl->settled = settled;
-    /* strncpy + explicit terminator rather than SDL_strlcpy: this file
-     * is part of the SDL-free sim library (MMO_PLAN Phase 6). */
-    strncpy(isl->name, name ? name : "Island", ISLAND_NAME_LEN - 1);
-    isl->name[ISLAND_NAME_LEN - 1] = '\0';
+    /* snprintf rather than SDL_strlcpy: this file is part of the SDL-free
+     * sim library (MMO_PLAN Phase 6). NOT strncpy — it does not
+     * null-terminate on truncation and MSVC deprecates it, so /WX turns
+     * it into a build failure; see set_reason() in building.c, which
+     * already learned this. */
+    snprintf(isl->name, ISLAND_NAME_LEN, "%s", name ? name : "Island");
 
     /* Ownership starts empty (game_reset_world assigns the starting
      * island; colonisation/grants assign the rest) and docking open —

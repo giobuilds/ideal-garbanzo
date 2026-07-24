@@ -167,7 +167,8 @@ int main(int argc, char *argv[])
 
     ns = net_host(port);
     if (!ns) {
-        fprintf(stderr, "host: could not listen on port %u\n", port);
+        fprintf(stderr, "host: could not listen on port %u\n",
+                (unsigned)port);
         game_free(gs);
         return 1;
     }
@@ -178,7 +179,7 @@ int main(int argc, char *argv[])
 
     start_tick = gs->sim_tick_no;
     printf("host: listening on %u, ticking at %d ms, checkpointing to %s\n",
-           port, SIM_TICK_MS, world_path);
+           (unsigned)port, SIM_TICK_MS, world_path);
     fflush(stdout);
 
     last_ns = now_ns();
